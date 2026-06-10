@@ -139,3 +139,8 @@ async def run_seeds() -> None:
     n_portal = await seed_portal()
     if n_portal:
         log.info("Seeded %d portal doc(s).", n_portal)
+    from app.db.seed_approvals import seed_approvals
+
+    n_approvals = await seed_approvals()
+    if n_approvals:
+        log.info("Seeded %d approvals doc(s).", n_approvals)
