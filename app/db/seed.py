@@ -129,3 +129,8 @@ async def run_seeds() -> None:
     n_verifier = await seed_verifier()
     if n_verifier:
         log.info("Seeded %d verifier doc(s).", n_verifier)
+    from app.db.seed_candidate import seed_candidate
+
+    n_candidate = await seed_candidate()
+    if n_candidate:
+        log.info("Seeded %d candidate doc(s).", n_candidate)

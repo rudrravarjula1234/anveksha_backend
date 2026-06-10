@@ -44,4 +44,12 @@ async def ensure_indexes() -> None:
     await db["session_reports"].create_index("id", unique=True)
     await db["verifier_slots"].create_index("id", unique=True)
 
+    # Candidate portal
+    await db["skill_reports"].create_index("id", unique=True)
+    await db["skill_report_details"].create_index("id", unique=True)
+    await db["insights"].create_index("id", unique=True)
+    await db["public_profiles"].create_index("userId", unique=True)
+    await db["session_history"].create_index("id", unique=True)
+    await db["notifications"].create_index("id", unique=True)
+
     log.info("Mongo indexes ensured.")
