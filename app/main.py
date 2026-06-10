@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app import __version__
-from app.api import auth, health
+from app.api import auth, health, skills
 from app.api.admin import bots as admin_bots
 from app.api.admin import models as admin_models
 from app.core.config import get_settings
@@ -83,6 +83,7 @@ def create_app() -> FastAPI:
     # ── Routes ───────────────────────────────────────────────────────────
     app.include_router(health.router)
     app.include_router(auth.router, prefix="/api/auth")
+    app.include_router(skills.router, prefix="/api/skills")
     app.include_router(admin_models.router, prefix="/api/admin/models")
     app.include_router(admin_bots.router, prefix="/api/admin/bots")
 

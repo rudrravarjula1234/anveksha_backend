@@ -30,4 +30,7 @@ async def ensure_indexes() -> None:
     await db["users"].create_index("email", unique=True)
     await db["users"].create_index("roles")  # multikey
 
+    # Skill ledgers — one per candidate
+    await db["skill_ledgers"].create_index("candidateId", unique=True)
+
     log.info("Mongo indexes ensured.")

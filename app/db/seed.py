@@ -110,6 +110,11 @@ async def seed_users() -> int:
 
 async def run_seeds() -> None:
     """Run every registered seeder. Called from the app lifespan."""
+    from app.db.seed_ledgers import seed_skill_ledgers
+
     n_users = await seed_users()
     if n_users:
         log.info("Seeded %d user(s).", n_users)
+    n_ledgers = await seed_skill_ledgers()
+    if n_ledgers:
+        log.info("Seeded %d skill ledger(s).", n_ledgers)
