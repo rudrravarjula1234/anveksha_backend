@@ -8,6 +8,7 @@ interface, so swapping it for a fake is safe.
 
 from __future__ import annotations
 
+import copy
 import os
 from typing import Any, AsyncIterator
 
@@ -53,7 +54,13 @@ def _matches(doc: dict[str, Any], query: dict[str, Any]) -> bool:
 
 
 class FakeCollection:
-    """Async-compatible drop-in covering the slice of pymongo we use."""
+    """Async-compatible drop-in covering the slice of pymongo we use.
+
+    Documents are DEEP-copied on insert and on read — real Mongo
+    round-trips through BSON, so callers can never share references with
+    stored documents. Without this, in-place mutation of nested dicts
+    would leak into module-level seed constants across tests.
+    """
 
     def __init__(self) -> None:
         self._docs: list[dict[str, Any]] = []
@@ -61,7 +68,7 @@ class FakeCollection:
     async def insert_one(self, doc: dict[str, Any]):
         # Mimic Mongo by stamping an internal _id ourselves.
         doc.setdefault("_id", f"oid_{len(self._docs)}")
-        self._docs.append(doc)
+        self._docs.append(copy.deepcopy(doc))
 
         class _R:
             inserted_id = doc["_id"]
@@ -71,7 +78,7 @@ class FakeCollection:
     async def find_one(self, query: dict[str, Any]):
         for d in self._docs:
             if _matches(d, query):
-                return dict(d)
+                return copy.deepcopy(d)
         return None
 
     def find(self, query: dict[str, Any] | None = None):
@@ -79,13 +86,13 @@ class FakeCollection:
             items = [d for d in self._docs if _matches(d, query)]
         else:
             items = list(self._docs)
-        return _ChainableCursor([dict(d) for d in items])
+        return _ChainableCursor([copy.deepcopy(d) for d in items])
 
     async def find_one_and_update(self, query: dict[str, Any], update: dict[str, Any], **_kw):
         for d in self._docs:
             if _matches(d, query):
-                d.update(update.get("$set", {}))
-                return dict(d)
+                d.update(copy.deepcopy(update.get("$set", {})))
+                return copy.deepcopy(d)
         return None
 
     async def delete_one(self, query: dict[str, Any]):
@@ -134,27 +141,34 @@ class FakeDB:
 
 @pytest.fixture
 def fake_db(monkeypatch: pytest.MonkeyPatch) -> FakeDB:
-    """Swap the global Mongo accessor for the in-memory stub."""
+    """Swap the ACTIVE Mongo handle for the in-memory stub.
+
+    We patch `mongo._state.db` (the value the real `get_database()` reads
+    on every call) rather than the function itself — service modules bind
+    `get_database` at import time, so replacing the function attribute
+    would only affect modules imported after the patch. Patching the
+    state keeps every reference live and gives each test a fresh DB.
+    """
     from app.db import mongo
 
     db = FakeDB()
-    monkeypatch.setattr(mongo, "get_database", lambda: db)
-    monkeypatch.setattr(mongo, "connect_to_mongo", _noop_async)
-    monkeypatch.setattr(mongo, "close_mongo", _noop_async)
+    monkeypatch.setattr(mongo._state, "db", db)
     return db
-
-
-async def _noop_async(*_args, **_kwargs):  # noqa: D401
-    """No-op replacement for connect/close during tests."""
-    return None
 
 
 @pytest.fixture
 async def client(fake_db: FakeDB) -> AsyncIterator[AsyncClient]:  # noqa: ARG001
-    """ASGI test client. Lifespan runs against the stubbed DB."""
+    """ASGI test client.
+
+    httpx's ASGITransport does NOT run the FastAPI lifespan, so the seeds
+    that normally run at startup are invoked explicitly here against the
+    stubbed DB.
+    """
+    from app.db.seed import run_seeds
     from app.main import create_app
 
     app = create_app()
+    await run_seeds()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
