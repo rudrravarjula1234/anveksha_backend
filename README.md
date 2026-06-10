@@ -3,10 +3,24 @@
 FastAPI service for the Anveksha skill-verification platform. Pairs with
 the React frontend at `C:\Development\anveksha_ui`.
 
-This is a greenfield service designed to grow alongside the frontend.
-First slice ships **AI Models** and **Bots** admin endpoints — the
-frontend's MSW passthrough allowlist (`anveksha_ui/src/mocks/passthrough.ts`)
-flips one endpoint at a time from the mock to this backend.
+**Full coverage**: 128 API paths across auth, skills, assessments +
+catalog + coupons, verifier console, candidate portal, privacy/dossier/
+booking, interviewer approvals, company portal (credits, unlock,
+pipeline, chat), admin ops (dashboard → pilots), the agentic framework
+(ported from the legacy backend, AutoGen 0.7.5) and the agent registry.
+Run the frontend against it with `pnpm dev:real` (MSW fully disabled).
+
+Key behaviors beyond mock parity:
+- **PHI protection** — interviewers see candidate dossier ids only;
+  candidates never see verifier identity at booking; companies see
+  aliases until a credits-paid unlock (`POST /api/companies/candidates/{id}/unlock`).
+- **Agents** — six pre-defined agents (brief, report, gap, gray, search,
+  chat) with admin-editable model binding + system message
+  (`/api/admin/agents`). Each serves a deterministic data-grounded
+  fallback until the `[agents]` extras + a provider credential are
+  configured; then real model runs activate automatically.
+- **On-demand briefs** — `POST /api/verifier/sessions/{id}/brief`
+  generates at the interviewer's click, never pre-computed.
 
 ## Stack
 
