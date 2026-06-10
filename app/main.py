@@ -13,11 +13,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app import __version__
+from app.api import agent_settings
+from app.api import agents as agents_api
 from app.api import approvals, auth, candidate, catalog, company, health, portal, skills, verifier
 from app.api.admin import assessments as admin_assessments
 from app.api.admin import bots as admin_bots
 from app.api.admin import coupons as admin_coupons
 from app.api.admin import models as admin_models
+from app.api.admin import ops as admin_ops
 from app.core.config import get_settings
 from app.core.exceptions import AppError
 from app.core.logging import setup_logging
@@ -99,6 +102,21 @@ def create_app() -> FastAPI:
     # Company router spans /api/companies, /api/company and /api/ai-search.
     app.include_router(company.router, prefix="/api")
     app.include_router(company.admin_router, prefix="/api/admin/credit-rate")
+    # Admin ops (dashboard, dossiers, slots, verifiers, candidates,
+    # companies, integrity, analytics, flags, rbac, pilots).
+    app.include_router(admin_ops.router, prefix="/api/admin")
+    app.include_router(admin_ops.bots_simple_router, prefix="/api/bots")
+    # Agentic framework: status, credentials, token usage, feedback.
+    app.include_router(agents_api.router, prefix="/api/agents")
+    # Agent registry (admin settings) + agent-powered feature endpoints.
+    app.include_router(agent_settings.admin_router, prefix="/api/admin/agents")
+    app.include_router(agent_settings.verifier_router, prefix="/api/verifier")
+    app.include_router(agent_settings.shared_router, prefix="/api/agents")
+
+    # Register deterministic agent fallbacks (import side effect).
+    # NOTE: must be a `from` import — `import app.services...` would bind
+    # the package name `app` in this scope, shadowing the FastAPI instance.
+    from app.services import agent_fallbacks  # noqa: F401, PLC0415
     app.include_router(admin_models.router, prefix="/api/admin/models")
     app.include_router(admin_bots.router, prefix="/api/admin/bots")
     app.include_router(admin_assessments.router_full, prefix="/api/admin/assessments-full")

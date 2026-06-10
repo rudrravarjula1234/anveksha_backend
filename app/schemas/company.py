@@ -153,6 +153,10 @@ class CandidateMatch(ReadModel):
     verifiedSkills: list[str] = Field(default_factory=list)
     graySkills: list[str] = Field(default_factory=list)
     lastActivity: str
+    # PHI gating — present (true) while the company hasn't paid to
+    # unlock this candidate; name/initials/location are masked then.
+    locked: Optional[bool] = None
+    alias: Optional[str] = None
 
 
 class SearchFacet(ReadModel):

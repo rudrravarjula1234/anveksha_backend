@@ -149,3 +149,13 @@ async def run_seeds() -> None:
     n_company = await seed_company()
     if n_company:
         log.info("Seeded %d company doc(s).", n_company)
+    from app.db.seed_admin_ops import seed_admin_ops
+
+    n_admin_ops = await seed_admin_ops()
+    if n_admin_ops:
+        log.info("Seeded %d admin-ops doc(s).", n_admin_ops)
+    from app.db.seed_agent_registry import seed_agent_registry
+
+    n_agents = await seed_agent_registry()
+    if n_agents:
+        log.info("Seeded %d agent config(s).", n_agents)

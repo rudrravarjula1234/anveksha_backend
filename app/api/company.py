@@ -167,6 +167,15 @@ async def ai_search(body: SearchRequest, service: CompanyService = Depends(_serv
     return await service.search(body)
 
 
+@router.post("/companies/candidates/{candidate_id}/unlock")
+async def unlock_candidate(
+    candidate_id: str,
+    service: CompanyService = Depends(_service),
+) -> dict[str, Any]:
+    """Reveal a candidate's identity. Costs credits (402 when short)."""
+    return await service.unlock_candidate(candidate_id)
+
+
 @router.get("/companies/pipeline", response_model=PipelineBoard)
 async def pipeline(service: CompanyService = Depends(_service)) -> PipelineBoard:
     return await service.pipeline()
@@ -196,13 +205,32 @@ async def request_followup(
 
 @router.post("/companies/chat")
 async def chat(body: ChatRequest, service: CompanyService = Depends(_service)) -> StreamingResponse:
-    """Streamed plain-text answer with a typing cadence (mock parity).
+    """Streamed plain-text answer with a typing cadence.
 
-    When the agentic framework is enabled with provider credentials this
-    is the seam where the canned answer gets replaced by a real
-    evidence-grounded agent run.
+    Runs the `candidate_chat` registry agent when the framework +
+    credentials are configured; otherwise streams the deterministic
+    fallback. Locked candidates are referred to by alias only.
     """
-    answer = service.pick_answer(body.prompt)
+    from app.core.privacy import candidate_alias  # noqa: PLC0415
+    from app.services.agent_registry_service import AgentRegistryService  # noqa: PLC0415
+
+    unlocked = await service._unlocked_ids()  # noqa: SLF001 — same module family
+    locked = body.candidateId not in unlocked
+
+    registry = AgentRegistryService()
+    result = await registry.run_agent(
+        "candidate_chat",
+        {
+            "task": "Answer the company's question about this candidate from session evidence only.",
+            "candidateRef": candidate_alias(body.candidateId) if locked else body.candidateId,
+            "locked": locked,
+            "question": body.prompt,
+        },
+    )
+    answer = result.output
+    if locked:
+        # Belt-and-braces: scrub the seeded candidate's name from canned text.
+        answer = answer.replace("Aarav", candidate_alias(body.candidateId)).replace("’s’", "'s")
 
     async def _gen():
         for i in range(0, len(answer), 24):

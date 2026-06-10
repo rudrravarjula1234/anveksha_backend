@@ -75,5 +75,26 @@ async def ensure_indexes() -> None:
     await db["pipeline_cards"].create_index("candidateId", unique=True)
     await db["followup_skills"].create_index("id", unique=True)
     await db["followup_requests"].create_index("id", unique=True)
+    await db["company_unlocks"].create_index("candidateId", unique=True)
+
+    # Admin ops
+    for coll in (
+        "admin_users", "bots_simple", "admin_dossiers", "admin_slots",
+        "admin_verifiers", "admin_candidates", "admin_companies",
+        "integrity_flags", "rbac_roles", "rbac_custom_roles", "rbac_audit",
+        "pilot_programs", "pilot_students",
+    ):
+        await db[coll].create_index("id", unique=True)
+    await db["admin_role_permissions"].create_index("role", unique=True)
+    for coll in (
+        "admin_feature_flags", "admin_dashboard", "admin_overview",
+        "integrity_signals", "admin_analytics", "admin_flag_registry",
+        "admin_flag_state",
+    ):
+        await db[coll].create_index("key", unique=True)
+
+    # Agents
+    await db["agent_registry"].create_index("id", unique=True)
+    await db["model_credentials"].create_index("provider", unique=True)
 
     log.info("Mongo indexes ensured.")

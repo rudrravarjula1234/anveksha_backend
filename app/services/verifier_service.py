@@ -10,6 +10,7 @@ from typing import Any
 from ulid import ULID
 
 from app.core.exceptions import NotFoundError
+from app.core.privacy import candidate_anon_id, mask_initials
 from app.db.mongo import get_database
 from app.schemas.verifier import (
     GovernanceData,
@@ -43,13 +44,30 @@ class VerifierService:
             raise RuntimeError(f"{coll} seed data missing")
         return _strip(doc)
 
+    # ── PHI masking ─────────────────────────────────────────────────────
+    #
+    # Interviewers never see candidate identity (product rule). The wire
+    # shape is unchanged; name fields carry the candidate's dossier id.
+
+    @staticmethod
+    def _anon_session(session: dict[str, Any]) -> dict[str, Any]:
+        name = session.get("candidate", "")
+        session["candidate"] = candidate_anon_id(name)
+        session["candidateInitials"] = mask_initials()
+        return session
+
     # ── Reads ───────────────────────────────────────────────────────────
 
     async def queue(self) -> VerifierQueue:
-        return VerifierQueue.model_validate(await self._singleton("verifier_queue"))
+        doc = await self._singleton("verifier_queue")
+        for lane in ("live", "upcoming", "completed"):
+            doc[lane] = [self._anon_session(s) for s in doc.get(lane, [])]
+        return VerifierQueue.model_validate(doc)
 
     async def next_brief(self) -> NextSessionBrief:
-        return NextSessionBrief.model_validate(await self._singleton("verifier_brief"))
+        doc = await self._singleton("verifier_brief")
+        doc["candidate"] = candidate_anon_id(doc.get("candidate", ""))
+        return NextSessionBrief.model_validate(doc)
 
     async def governance(self) -> GovernanceData:
         return GovernanceData.model_validate(await self._singleton("verifier_governance"))
@@ -72,7 +90,13 @@ class VerifierService:
 
     async def pending_reports(self) -> list[PendingReportListItem]:
         docs = await self._db()["pending_reports"].find().to_list(length=200)
-        return [PendingReportListItem.model_validate(_strip(d)) for d in docs]
+        items = []
+        for d in docs:
+            d = _strip(d)
+            d["candidate"] = candidate_anon_id(d.get("candidate", ""))
+            d["initials"] = mask_initials()
+            items.append(PendingReportListItem.model_validate(d))
+        return items
 
     async def _suggested_gaps(self) -> list[SuggestedGap]:
         doc = await self._singleton("verifier_suggested_gaps")
@@ -86,8 +110,11 @@ class VerifierService:
             doc = await self._db()["session_reports"].find_one({"id": "rpt_001"})
         if doc is None:
             raise NotFoundError(f"Report {report_id} not found")
+        cleaned = _strip(doc)
+        # PHI rule: interviewers see candidate ids, never names.
+        cleaned["candidateName"] = candidate_anon_id(cleaned.get("candidateName", ""))
         return ReportEnvelope(
-            report=SessionReport.model_validate(_strip(doc)),
+            report=SessionReport.model_validate(cleaned),
             suggestedGaps=await self._suggested_gaps(),
         )
 

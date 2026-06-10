@@ -6,6 +6,7 @@ from typing import Any, Optional
 from ulid import ULID
 
 from app.core.exceptions import NotFoundError
+from app.core.privacy import MASKED_VERIFIER
 from app.db.mongo import get_database
 from app.schemas.booking import (
     BookingCatalog,
@@ -108,7 +109,14 @@ class BookingService:
             doc = await coll.find_one({"catalogId": "KAF-204"})
         if doc is None:
             raise RuntimeError("booking_catalogs seed data missing")
-        return BookingCatalog.model_validate(_strip(doc))
+        cleaned = _strip(doc)
+        # PHI rule: candidates never learn WHICH verifier they're paired
+        # with at booking time. Ratings stay visible (quality signal);
+        # identity does not.
+        for slots in cleaned.get("slotsByDay", {}).values():
+            for slot in slots:
+                slot["verifier"] = MASKED_VERIFIER
+        return BookingCatalog.model_validate(cleaned)
 
     async def schedule(self, payload: ScheduleRequest) -> ScheduleResponse:
         catalog = await self.catalog()

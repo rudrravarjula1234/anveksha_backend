@@ -11,6 +11,7 @@ from typing import Any, Optional
 from ulid import ULID
 
 from app.core.exceptions import AppError, NotFoundError, ValidationError
+from app.core.privacy import candidate_alias, mask_initials
 from app.db.mongo import get_database
 from app.schemas.company import (
     AnonymousInterviewer,
@@ -229,26 +230,81 @@ class CompanyService:
         if result.deleted_count != 1:
             raise NotFoundError(f"Follow-up {followup_id} not found")
 
+    # ── PHI: candidate unlock gating ────────────────────────────────────
+    #
+    # Companies see candidates by ALIAS until they pay (credits) to
+    # unlock. Verification scores + skills stay visible — those are the
+    # product; identity is the paid layer.
+
+    UNLOCK_COST = 50  # credits per candidate unlock
+
+    async def _unlocked_ids(self) -> set:
+        docs = await self._db()["company_unlocks"].find().to_list(length=1000)
+        return {d["candidateId"] for d in docs}
+
+    @staticmethod
+    def _mask_candidate(doc: dict[str, Any], index_hint: int) -> dict[str, Any]:
+        alias = candidate_alias(doc.get("id", ""), index_hint)
+        doc["name"] = alias
+        doc["initials"] = mask_initials()
+        doc["location"] = "Unlock to reveal"
+        doc["locked"] = True
+        doc["alias"] = alias
+        return doc
+
+    async def unlock_candidate(self, candidate_id: str) -> dict[str, Any]:
+        """Spend credits to reveal a candidate's identity."""
+        target = await self._db()["search_candidates"].find_one({"id": candidate_id})
+        if target is None:
+            raise NotFoundError(f"Candidate {candidate_id} not found")
+        if candidate_id in await self._unlocked_ids():
+            return {"ok": True, "alreadyUnlocked": True, "candidateId": candidate_id}
+        credits = await self.spend(CreditMutation(
+            amount=self.UNLOCK_COST,
+            reason=f"Unlock candidate · {candidate_id}",
+        ))
+        await self._db()["company_unlocks"].insert_one({
+            "candidateId": candidate_id,
+            "unlockedAt": _now_iso(),
+        })
+        return {
+            "ok": True,
+            "candidateId": candidate_id,
+            "candidate": _strip(target),
+            "balance": credits.balance,
+        }
+
     # ── Discovery / pipeline / follow-up requests ───────────────────────
 
     async def search(self, body: SearchRequest) -> SearchResponse:
         docs = await self._db()["search_candidates"].find().to_list(length=200)
-        candidates = [CandidateMatch.model_validate(_strip(d)) for d in docs]
+        unlocked = await self._unlocked_ids()
+        rows: list[CandidateMatch] = []
+        for i, d in enumerate(docs):
+            cleaned = _strip(d)
+            if cleaned.get("id") not in unlocked:
+                cleaned = self._mask_candidate(cleaned, i)
+            rows.append(CandidateMatch.model_validate(cleaned))
         min_score = 0
         if body.filters and isinstance(body.filters.get("minScore"), (int, float)):
             min_score = body.filters["minScore"]
         facets_doc = await self._db()["search_facets"].find_one({"key": "default"}) or {}
         return SearchResponse(
             query=body.query,
-            candidates=[c for c in candidates if c.verificationScore >= min_score],
+            candidates=[c for c in rows if c.verificationScore >= min_score],
             facets=SearchFacets.model_validate(_strip(facets_doc)),
         )
 
     async def pipeline(self) -> PipelineBoard:
         docs = await self._db()["pipeline_cards"].find().to_list(length=200)
-        cards = [PipelineCard.model_validate(_strip(d)) for d in docs]
+        unlocked = await self._unlocked_ids()
         board = PipelineBoard()
-        for card in cards:
+        for i, d in enumerate(docs):
+            cleaned = _strip(d)
+            if cleaned.get("candidateId") not in unlocked:
+                cleaned["name"] = candidate_alias(cleaned.get("candidateId", ""), i)
+                cleaned["initials"] = mask_initials()
+            card = PipelineCard.model_validate(cleaned)
             getattr(board, card.stage).append(card)
         return board
 
