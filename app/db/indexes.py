@@ -52,4 +52,11 @@ async def ensure_indexes() -> None:
     await db["session_history"].create_index("id", unique=True)
     await db["notifications"].create_index("id", unique=True)
 
+    # Privacy / dossier / booking
+    await db["privacy_settings"].create_index("userId", unique=True)
+    await db["dossiers"].create_index("id", unique=True)
+    await db["booking_catalogs"].create_index("catalogId", unique=True)
+    await db["live_sessions"].create_index("id", unique=True)
+    await db["my_interviews"].create_index("id", unique=True)
+
     log.info("Mongo indexes ensured.")

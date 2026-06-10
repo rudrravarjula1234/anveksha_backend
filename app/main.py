@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app import __version__
-from app.api import auth, candidate, catalog, health, skills, verifier
+from app.api import auth, candidate, catalog, health, portal, skills, verifier
 from app.api.admin import assessments as admin_assessments
 from app.api.admin import bots as admin_bots
 from app.api.admin import coupons as admin_coupons
@@ -91,6 +91,8 @@ def create_app() -> FastAPI:
     # Candidate router spans /api/candidate, /api/notifications and
     # /api/profiles — paths are fully qualified inside, so mount at /api.
     app.include_router(candidate.router, prefix="/api")
+    # Portal router spans /api/privacy, /api/dossier and /api/interviews.
+    app.include_router(portal.router, prefix="/api")
     app.include_router(admin_models.router, prefix="/api/admin/models")
     app.include_router(admin_bots.router, prefix="/api/admin/bots")
     app.include_router(admin_assessments.router_full, prefix="/api/admin/assessments-full")
