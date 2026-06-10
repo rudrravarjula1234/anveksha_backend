@@ -1,0 +1,11 @@
+# Mirror of [project.dependencies] in pyproject.toml — kept for tools that
+# prefer requirements.txt (Dockerfile uses this). Source of truth is
+# pyproject.toml; update both when adding a dependency.
+fastapi[standard]>=0.115.0
+uvicorn[standard]>=0.30.0
+motor>=3.5.0
+pydantic>=2.7.0
+pydantic-settings>=2.4.0
+python-ulid>=2.7.0
+httpx>=0.27.0
+python-multipart>=0.0.9

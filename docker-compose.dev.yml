@@ -1,0 +1,15 @@
+# Dev override — apply on top of docker-compose.yml for hot-reload:
+#
+#     docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# Mounts the source tree into the container so uvicorn --reload picks up
+# changes without a rebuild. Don't use this in production.
+
+services:
+  api:
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    volumes:
+      - ./app:/app/app:ro
+    environment:
+      DEBUG: "true"
+      LOG_LEVEL: debug
