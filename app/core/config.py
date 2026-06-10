@@ -53,6 +53,17 @@ class Settings(BaseSettings):
     JWT_ACCESS_TTL_MIN: int = Field(default=60)
     JWT_REFRESH_TTL_DAYS: int = Field(default=14)
 
+    # ─── Agents (app/agents) ─────────────────────────────────────────────
+    CREDENTIAL_ENCRYPTION_KEY: Optional[str] = Field(
+        default=None,
+        description=(
+            "Fernet key for encrypting provider API keys at rest "
+            "(model_credentials collection). Generate with: python -c "
+            '"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())". '
+            "When unset and DEBUG=true, a stable dev key is derived from JWT_SECRET."
+        ),
+    )
+
     # ── Derived values ────────────────────────────────────────────────────
 
     @computed_field  # type: ignore[prop-decorator]
