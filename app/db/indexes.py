@@ -39,4 +39,9 @@ async def ensure_indexes() -> None:
     await db["assessments"].create_index("published")
     await db["coupons"].create_index("code", unique=True)
 
+    # Verifier console
+    await db["pending_reports"].create_index("id", unique=True)
+    await db["session_reports"].create_index("id", unique=True)
+    await db["verifier_slots"].create_index("id", unique=True)
+
     log.info("Mongo indexes ensured.")

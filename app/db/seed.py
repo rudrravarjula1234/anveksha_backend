@@ -112,6 +112,7 @@ async def run_seeds() -> None:
     """Run every registered seeder. Called from the app lifespan."""
     from app.db.seed_assessments import seed_assessments, seed_coupons
     from app.db.seed_ledgers import seed_skill_ledgers
+    from app.db.seed_verifier import seed_verifier
 
     n_users = await seed_users()
     if n_users:
@@ -125,3 +126,6 @@ async def run_seeds() -> None:
     n_coupons = await seed_coupons()
     if n_coupons:
         log.info("Seeded %d coupon(s).", n_coupons)
+    n_verifier = await seed_verifier()
+    if n_verifier:
+        log.info("Seeded %d verifier doc(s).", n_verifier)
