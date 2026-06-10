@@ -33,4 +33,10 @@ async def ensure_indexes() -> None:
     # Skill ledgers — one per candidate
     await db["skill_ledgers"].create_index("candidateId", unique=True)
 
+    # Assessments + coupons
+    await db["assessments"].create_index("id", unique=True)
+    await db["assessments"].create_index("slug")
+    await db["assessments"].create_index("published")
+    await db["coupons"].create_index("code", unique=True)
+
     log.info("Mongo indexes ensured.")
