@@ -65,4 +65,15 @@ async def ensure_indexes() -> None:
     await db["specialist_invites"].create_index("id", unique=True)
     await db["active_interviewers"].create_index("candidateId", unique=True)
 
+    # Company portal
+    await db["companies"].create_index("id", unique=True)
+    await db["anonymous_interviewers"].create_index("id", unique=True)
+    await db["credit_transactions"].create_index("id", unique=True)
+    await db["team_members"].create_index("id", unique=True)
+    await db["gray_followups"].create_index("id", unique=True)
+    await db["search_candidates"].create_index("id", unique=True)
+    await db["pipeline_cards"].create_index("candidateId", unique=True)
+    await db["followup_skills"].create_index("id", unique=True)
+    await db["followup_requests"].create_index("id", unique=True)
+
     log.info("Mongo indexes ensured.")

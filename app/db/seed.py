@@ -144,3 +144,8 @@ async def run_seeds() -> None:
     n_approvals = await seed_approvals()
     if n_approvals:
         log.info("Seeded %d approvals doc(s).", n_approvals)
+    from app.db.seed_company import seed_company
+
+    n_company = await seed_company()
+    if n_company:
+        log.info("Seeded %d company doc(s).", n_company)

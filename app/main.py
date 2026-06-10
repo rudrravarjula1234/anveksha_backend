@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app import __version__
-from app.api import approvals, auth, candidate, catalog, health, portal, skills, verifier
+from app.api import approvals, auth, candidate, catalog, company, health, portal, skills, verifier
 from app.api.admin import assessments as admin_assessments
 from app.api.admin import bots as admin_bots
 from app.api.admin import coupons as admin_coupons
@@ -96,6 +96,9 @@ def create_app() -> FastAPI:
     app.include_router(approvals.admin_router, prefix="/api/admin/interviewer-approvals")
     app.include_router(approvals.specialists_router, prefix="/api/admin/specialists")
     app.include_router(approvals.candidate_router, prefix="/api/candidate")
+    # Company router spans /api/companies, /api/company and /api/ai-search.
+    app.include_router(company.router, prefix="/api")
+    app.include_router(company.admin_router, prefix="/api/admin/credit-rate")
     app.include_router(admin_models.router, prefix="/api/admin/models")
     app.include_router(admin_bots.router, prefix="/api/admin/bots")
     app.include_router(admin_assessments.router_full, prefix="/api/admin/assessments-full")
