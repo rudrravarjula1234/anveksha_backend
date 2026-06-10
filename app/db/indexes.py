@@ -25,4 +25,9 @@ async def ensure_indexes() -> None:
     await db.bots.create_index("status")
     await db.bots.create_index("specializations")  # multikey
 
+    # Users
+    await db["users"].create_index("id", unique=True)
+    await db["users"].create_index("email", unique=True)
+    await db["users"].create_index("roles")  # multikey
+
     log.info("Mongo indexes ensured.")

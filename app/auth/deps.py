@@ -1,14 +1,17 @@
 """FastAPI dependencies for authentication & authorisation.
 
 `get_current_principal` extracts the caller's identity from the bearer
-token; it accepts dev tokens in DEBUG mode (matching the frontend mock)
-and is structured so JWTs can drop in alongside without rewriting call
-sites.
+token. In DEBUG mode it accepts the frontend's dev tokens (both the
+`{sub, role}` and legacy `{email, role}` payload shapes) and enriches
+the principal from the seeded users collection when a matching user
+exists — DB roles are more authoritative than the single role baked
+into the token.
 
-`require_roles(...)` returns a dependency factory that 403s unless the
-caller has at least one of the listed roles.
+`require_roles(...)` returns a dependency that 403s unless the caller
+has at least one of the listed roles.
 """
 
+import logging
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -16,6 +19,9 @@ from fastapi import Depends, Header, HTTPException, status
 
 from app.auth.dev_tokens import decode_dev_token
 from app.core.config import get_settings
+from app.db.mongo import get_database
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -23,14 +29,14 @@ class Principal:
     """The authenticated caller — lightweight value object.
 
     Distinct from a User document. A Principal represents *who is making
-    this request*; whether that maps to a persisted User row is a concern
-    for the relevant service layer. For dev-tokens we mint a Principal
-    with no DB lookup.
+    this request*; the linked user document (when one exists) rides along
+    in `user_doc` for handlers that need profile fields.
     """
 
     email: str
     roles: list[str] = field(default_factory=list)
-    user_id: Optional[str] = None  # provided by token; not necessarily a Mongo _id
+    user_id: Optional[str] = None
+    user_doc: Optional[dict] = None  # raw users-collection document, if resolved
 
     def has_role(self, role: str) -> bool:
         return role in self.roles
@@ -55,6 +61,25 @@ def _extract_bearer(authorization: Optional[str]) -> str:
     return parts[1]
 
 
+async def _resolve_user(sub: Optional[str], email: Optional[str]) -> Optional[dict]:
+    """Look up the user document by id first, then email. Best-effort —
+    returns None rather than raising so unseeded principals still work."""
+    try:
+        db = get_database()
+    except RuntimeError:
+        return None
+    users = db["users"]
+    if sub:
+        doc = await users.find_one({"id": sub})
+        if doc:
+            return doc
+    if email:
+        doc = await users.find_one({"email": email})
+        if doc:
+            return doc
+    return None
+
+
 # ── Dependencies ────────────────────────────────────────────────────────
 
 async def get_current_principal(
@@ -67,19 +92,33 @@ async def get_current_principal(
     # Dev token path — frontend mock contract.
     if settings.DEBUG and token.startswith("dev_"):
         payload = decode_dev_token(token)
-        if not payload or "email" not in payload:
+        if not payload or ("sub" not in payload and "email" not in payload):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid dev token",
             )
-        # role can be a single string in the legacy token or a list.
+
+        sub = payload.get("sub")
+        email = payload.get("email")
         raw_role = payload.get("role")
-        roles = [raw_role] if isinstance(raw_role, str) else list(raw_role or [])
-        return Principal(
-            email=payload["email"],
-            roles=roles,
-            user_id=payload.get("userId"),
-        )
+        token_roles = [raw_role] if isinstance(raw_role, str) else list(raw_role or [])
+
+        user_doc = await _resolve_user(sub, email)
+        if user_doc is not None:
+            if not user_doc.get("is_active", True):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Account deactivated",
+                )
+            return Principal(
+                email=user_doc["email"],
+                roles=list(user_doc.get("roles", token_roles)),
+                user_id=user_doc["id"],
+                user_doc=user_doc,
+            )
+
+        # No seeded user — trust the token contents (pure-dev scenario).
+        return Principal(email=email or "", roles=token_roles, user_id=sub)
 
     # Future: validate a real JWT here, then look up the User by sub/email.
     raise HTTPException(

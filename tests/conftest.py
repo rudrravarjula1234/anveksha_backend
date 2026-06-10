@@ -39,6 +39,19 @@ class _ChainableCursor:
         return list(self._items)
 
 
+def _matches(doc: dict[str, Any], query: dict[str, Any]) -> bool:
+    """Mongo-flavoured equality: a scalar query value against an array
+    field means 'array contains' (e.g. {"roles": "admin"})."""
+    for k, v in query.items():
+        actual = doc.get(k)
+        if isinstance(actual, list) and not isinstance(v, list):
+            if v not in actual:
+                return False
+        elif actual != v:
+            return False
+    return True
+
+
 class FakeCollection:
     """Async-compatible drop-in covering the slice of pymongo we use."""
 
@@ -57,27 +70,27 @@ class FakeCollection:
 
     async def find_one(self, query: dict[str, Any]):
         for d in self._docs:
-            if all(d.get(k) == v for k, v in query.items()):
+            if _matches(d, query):
                 return dict(d)
         return None
 
     def find(self, query: dict[str, Any] | None = None):
         if query:
-            items = [d for d in self._docs if all(d.get(k) == v for k, v in query.items())]
+            items = [d for d in self._docs if _matches(d, query)]
         else:
             items = list(self._docs)
         return _ChainableCursor([dict(d) for d in items])
 
     async def find_one_and_update(self, query: dict[str, Any], update: dict[str, Any], **_kw):
         for d in self._docs:
-            if all(d.get(k) == v for k, v in query.items()):
+            if _matches(d, query):
                 d.update(update.get("$set", {}))
                 return dict(d)
         return None
 
     async def delete_one(self, query: dict[str, Any]):
         for i, d in enumerate(self._docs):
-            if all(d.get(k) == v for k, v in query.items()):
+            if _matches(d, query):
                 self._docs.pop(i)
 
                 class _R:
@@ -95,17 +108,22 @@ class FakeCollection:
 
 
 class FakeDB:
+    """Dict-backed registry — every named collection persists for the
+    lifetime of the fixture, mirroring a real database handle."""
+
     def __init__(self) -> None:
-        self.ai_models = FakeCollection()
-        self.bots = FakeCollection()
+        self._collections: dict[str, FakeCollection] = {}
 
     def __getitem__(self, name: str) -> FakeCollection:
-        if name == "ai_models":
-            return self.ai_models
-        if name == "bots":
-            return self.bots
-        # Unknown collection — give an empty one rather than crash.
-        return FakeCollection()
+        if name not in self._collections:
+            self._collections[name] = FakeCollection()
+        return self._collections[name]
+
+    def __getattr__(self, name: str) -> FakeCollection:
+        # Attribute access (db.bots) delegates to item access (db["bots"]).
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return self[name]
 
     async def command(self, *_args, **_kwargs):
         return {"ok": 1}
