@@ -1,28 +1,67 @@
 """Authentication flows.
 
-DEBUG-mode flows mirror the frontend mock exactly so the migration is
-transparent:
-
+- google-register: when GOOGLE_CLIENT_ID is configured, verifies the
+  real Google ID token (signature/expiry via Google's tokeninfo,
+  audience + email_verified enforced here), then finds the user by
+  email — or creates a new candidate on first login. Falls back to the
+  DEBUG stub when no client id is configured.
 - dev-login: look up the seeded persona (by explicit userId, else by
-  role) and mint a `dev_` token pair.
+  role) and mint a `dev_` token pair. DEBUG only.
 - refresh: accept any token ending in `.refresh`, re-issue for the same
   user (decoded from the embedded payload).
-- google-register: stub — resolves to the seeded persona for the
-  requested role. Real Google ID-token verification lands when we leave
-  DEBUG-only auth.
 """
 
+import logging
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
+
+import httpx
+from ulid import ULID
 
 from app.auth.dev_tokens import decode_dev_token, make_dev_token
+from app.core.config import get_settings
 from app.core.exceptions import ForbiddenError, NotFoundError, UnauthorizedError
 from app.db.mongo import get_database
 from app.schemas.user import AuthResponse, User, UserRole
 
+log = logging.getLogger(__name__)
+
+_GOOGLE_TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo"
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+async def verify_google_id_token(id_token: str, audience: str) -> dict[str, Any]:
+    """Validate a Google ID token and return its claims.
+
+    Google's tokeninfo endpoint checks the signature and expiry
+    server-side; we additionally enforce the audience (our OAuth client
+    id) and that Google has verified the email. Module-level so tests
+    can monkeypatch it without touching the service.
+
+    Raises UnauthorizedError on any validation failure.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(_GOOGLE_TOKENINFO_URL, params={"id_token": id_token})
+    except httpx.HTTPError as exc:
+        log.warning("Google tokeninfo unreachable: %s", exc)
+        raise UnauthorizedError("Could not verify Google token") from exc
+
+    if resp.status_code != 200:
+        raise UnauthorizedError("Invalid or expired Google token")
+
+    claims = resp.json()
+    if claims.get("aud") != audience:
+        log.warning("Google token audience mismatch: %s", claims.get("aud"))
+        raise UnauthorizedError("Google token was issued for a different app")
+    if claims.get("email_verified") not in (True, "true"):
+        raise UnauthorizedError("Google account email is not verified")
+    if not claims.get("email"):
+        raise UnauthorizedError("Google token carries no email")
+    return claims
 
 
 class AuthService:
@@ -93,13 +132,62 @@ class AuthService:
         doc = await self._user_by_id(doc["id"]) or doc
         return self._issue(doc, role)
 
-    async def google_register(self, role: UserRole) -> AuthResponse:
-        """DEBUG stub — resolves to the seeded persona for the role.
+    async def google_register(self, google_token: str, role: UserRole) -> AuthResponse:
+        """Sign in (or register) with a Google ID token.
 
-        Production implementation will verify the Google ID token, then
-        find-or-create the user. The response contract stays identical.
+        With GOOGLE_CLIENT_ID configured: verify the token, then resolve
+        the user by the token's email. Seeded users keep their assigned
+        roles (e.g. an email seeded as admin logs in as admin regardless
+        of the `role` hint). Unknown emails are registered as new
+        candidates on first login.
+
+        Without a client id (pure-dev): fall back to the role-based stub
+        so the frontend's mock-parity flow keeps working.
         """
-        return await self.dev_login(role)
+        settings = get_settings()
+        if not settings.GOOGLE_CLIENT_ID:
+            if settings.DEBUG:
+                return await self.dev_login(role)
+            raise UnauthorizedError("Google sign-in is not configured")
+
+        claims = await verify_google_id_token(google_token, settings.GOOGLE_CLIENT_ID)
+        email = claims["email"].lower()
+
+        doc = await self._users().find_one({"email": email})
+        if doc is None:
+            doc = await self._register_from_google(email, claims)
+        elif not doc.get("is_active", True):
+            raise ForbiddenError("Account deactivated")
+
+        # The user's primary role wins over the request hint — a seeded
+        # admin email must land on the admin portal.
+        effective_role: UserRole = (doc.get("roles") or [role])[0]
+        await self._touch_last_login(doc["id"])
+        doc = await self._user_by_id(doc["id"]) or doc
+        log.info("Google sign-in: %s as %s", email, effective_role)
+        return self._issue(doc, effective_role)
+
+    async def _register_from_google(self, email: str, claims: dict[str, Any]) -> dict:
+        """First-time Google login — create the user from token claims."""
+        first = claims.get("given_name") or email.split("@")[0]
+        last = claims.get("family_name") or ""
+        doc = {
+            "id": f"usr_g_{ULID()}",
+            "email": email,
+            "first_name": first,
+            "last_name": last,
+            "user_name": email.split("@")[0],
+            # Self-registration is always candidate — privileged roles are
+            # granted by an admin (or the seed list), never self-asserted.
+            "roles": ["candidate"],
+            "is_active": True,
+            "created_at": _now_iso(),
+            "updated_at": _now_iso(),
+            "last_login": None,
+        }
+        await self._users().insert_one(doc)
+        log.info("Registered new Google user %s (%s)", email, doc["id"])
+        return doc
 
     async def refresh(self, refresh_token: str) -> AuthResponse:
         if not refresh_token.endswith(".refresh"):

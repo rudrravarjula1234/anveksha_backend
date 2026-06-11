@@ -88,6 +88,30 @@ SEED_USERS: list[dict] = [
         "is_active": True,
         "created_at": "2025-01-01T09:00:00.000Z",
     },
+    # ── Real Google-account users ────────────────────────────────────────
+    # These sign in through the actual Google OAuth flow (frontend
+    # GoogleLogin button → /api/auth/google-register with a real ID
+    # token). Seeded so their roles are assigned before first login.
+    {
+        "id": "usr_cand_rajesh",
+        "email": "rajesh.rudravarjula@gmail.com",
+        "first_name": "Rajesh",
+        "last_name": "Rudravarjula",
+        "user_name": "rajesh.rudravarjula",
+        "roles": ["candidate"],
+        "is_active": True,
+        "created_at": "2026-06-01T09:00:00.000Z",
+    },
+    {
+        "id": "usr_adm_rajesh",
+        "email": "rudrravarjula1234@gmail.com",
+        "first_name": "Rajesh",
+        "last_name": "Rudravarjula",
+        "user_name": "rudrravarjula1234",
+        "roles": ["admin"],
+        "is_active": True,
+        "created_at": "2026-06-01T09:00:00.000Z",
+    },
 ]
 
 

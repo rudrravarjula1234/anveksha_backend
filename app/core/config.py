@@ -53,6 +53,17 @@ class Settings(BaseSettings):
     JWT_ACCESS_TTL_MIN: int = Field(default=60)
     JWT_REFRESH_TTL_DAYS: int = Field(default=14)
 
+    # ─── Google OAuth ────────────────────────────────────────────────────
+    GOOGLE_CLIENT_ID: Optional[str] = Field(
+        default=None,
+        description=(
+            "OAuth client id — MUST match the frontend's VITE_GOOGLE_CLIENT_ID. "
+            "When set, /api/auth/google-register verifies real Google ID tokens "
+            "(audience check against this id). When unset and DEBUG=true, the "
+            "endpoint falls back to the dev stub."
+        ),
+    )
+
     # ─── Agents (app/agents) ─────────────────────────────────────────────
     CREDENTIAL_ENCRYPTION_KEY: Optional[str] = Field(
         default=None,

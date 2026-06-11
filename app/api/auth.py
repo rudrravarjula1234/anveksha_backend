@@ -51,9 +51,10 @@ async def google_register(
     body: GoogleRegisterRequest,
     service: AuthService = Depends(_service),
 ) -> AuthResponse:
-    # DEBUG stub today; will gain real Google ID-token verification.
-    _debug_only()
-    return await service.google_register(body.role or "candidate")
+    # Real Google ID-token verification when GOOGLE_CLIENT_ID is set;
+    # the service falls back to the dev stub in DEBUG without it. Not
+    # gated by _debug_only — this is the production sign-in path.
+    return await service.google_register(body.google_token, body.role or "candidate")
 
 
 @router.post("/refresh", response_model=AuthResponse)
