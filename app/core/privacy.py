@@ -37,7 +37,7 @@ CANDIDATE_ALIASES: dict[str, str] = {
     "cand_004": "Candidate D",
 }
 
-MASKED_VERIFIER = "Anveksha Verifier"
+MASKED_VERIFIER = "Tatvo Verifier"
 
 
 def candidate_anon_id(name: str) -> str:

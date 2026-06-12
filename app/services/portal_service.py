@@ -93,7 +93,7 @@ class DossierService:
         await self._coll().find_one_and_update(
             {"id": dossier.id}, {"$set": {"isShared": True}}, return_document=True
         )
-        return {"ok": True, "shareUrl": f"https://anveksha.app/d/{dossier.id}"}
+        return {"ok": True, "shareUrl": f"https://tatvo.app/d/{dossier.id}"}
 
 
 class BookingService:

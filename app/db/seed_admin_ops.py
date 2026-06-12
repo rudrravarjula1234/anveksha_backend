@@ -73,7 +73,7 @@ ADMIN_USERS: list[dict] = [
     {
         "id": "usr_adm_001",
         "email": "admin@anveksha.dev",
-        "name": "Anveksha Admin",
+        "name": "Tatvo Admin",
         "roles": ["admin"],
         "is_active": True,
         "created_at": "2025-01-01T09:00:00.000Z",

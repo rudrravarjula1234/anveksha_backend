@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = Field(default="info")
     HOST: str = Field(default="0.0.0.0")
     PORT: int = Field(default=8000)
-    PROJECT_NAME: str = Field(default="Anveksha")
+    PROJECT_NAME: str = Field(default="Tatvo")
     VERSION: str = Field(default="0.1.0")
 
     # ─── Mongo ───────────────────────────────────────────────────────────

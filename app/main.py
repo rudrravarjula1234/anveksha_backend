@@ -51,7 +51,7 @@ def create_app() -> FastAPI:
     settings = get_settings()
 
     app = FastAPI(
-        title="Anveksha Backend",
+        title="Tatvo Backend",
         version=__version__,
         lifespan=lifespan,
         docs_url="/docs" if settings.DEBUG else None,

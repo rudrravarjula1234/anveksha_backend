@@ -81,7 +81,7 @@ SEED_USERS: list[dict] = [
     {
         "id": "usr_adm_001",
         "email": "admin@anveksha.dev",
-        "first_name": "Anveksha",
+        "first_name": "Tatvo",
         "last_name": "Admin",
         "user_name": "admin",
         "roles": ["admin"],

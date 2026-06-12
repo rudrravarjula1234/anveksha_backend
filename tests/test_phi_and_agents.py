@@ -71,7 +71,7 @@ async def test_pipeline_masks_locked(client: AsyncClient):
 async def test_booking_slots_hide_verifier_names(client: AsyncClient):
     r = await client.get("/api/interviews/catalog", headers=_hdr(*CANDIDATE))
     slots = r.json()["slotsByDay"]["d5"]
-    assert all(s["verifier"] == "Anveksha Verifier" for s in slots)
+    assert all(s["verifier"] == "Tatvo Verifier" for s in slots)
     # Quality signal (rating) is preserved.
     assert all(s["rating"] > 0 for s in slots)
 
