@@ -1,6 +1,6 @@
 """Agent registry schemas.
 
-Tatvo ships a fixed set of PRE-DEFINED agents (brief generation,
+Anveksha ships a fixed set of PRE-DEFINED agents (brief generation,
 report generation, gap/gray analysis, candidate search, candidate chat).
 Admins can re-point each agent at a different AI model and edit its
 system message — both stored in Mongo. The registry rows are config,
