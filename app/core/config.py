@@ -9,7 +9,7 @@ from functools import lru_cache
 from typing import Optional
 from urllib.parse import quote_plus
 
-from pydantic import Field, computed_field
+from pydantic import AliasChoices, Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -36,10 +36,27 @@ class Settings(BaseSettings):
     VERSION: str = Field(default="0.1.0")
 
     # ─── Mongo ───────────────────────────────────────────────────────────
-    MONGO_URI: Optional[str] = Field(default=None, description="Full URI overrides component parts.")
-    MONGO_USERNAME: str = Field(default="anveksha")
-    MONGO_PASSWORD: str = Field(default="changeme")
-    MONGO_DATABASE: str = Field(default="anveksha")
+    # Each field accepts both the historical MONGO_* env name and the
+    # deployment's MONGODB_* schema (MONGODB_URI / MONGODB_USERNAME /
+    # MONGODB_PASSWORD / MONGODB_DB_NAME). A full URI (cloud Atlas srv string)
+    # takes precedence over the component parts.
+    MONGO_URI: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("MONGO_URI", "MONGODB_URI"),
+        description="Full URI overrides component parts.",
+    )
+    MONGO_USERNAME: str = Field(
+        default="anveksha",
+        validation_alias=AliasChoices("MONGO_USERNAME", "MONGODB_USERNAME"),
+    )
+    MONGO_PASSWORD: str = Field(
+        default="changeme",
+        validation_alias=AliasChoices("MONGO_PASSWORD", "MONGODB_PASSWORD"),
+    )
+    MONGO_DATABASE: str = Field(
+        default="anveksha",
+        validation_alias=AliasChoices("MONGO_DATABASE", "MONGODB_DB_NAME", "MONGODB_DATABASE"),
+    )
     MONGO_HOST: str = Field(default="mongo")
     MONGO_PORT: int = Field(default=27017)
     MONGO_AUTH_SOURCE: str = Field(default="admin")

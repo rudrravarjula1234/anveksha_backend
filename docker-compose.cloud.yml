@@ -1,24 +1,46 @@
-# Cloud-Mongo stack: API + web SPA, NO on-prem MongoDB.
+# Anveksha full stack: API + web SPA.
 #
-# The backend connects to a managed MongoDB (Atlas) via MONGO_URI — set it
-# in `.env` in this directory:
+# Mongo connection is driven entirely by .env (MONGODB_* schema):
 #
-#   MONGO_URI=mongodb+srv://<user>:<pass>@<cluster>.mongodb.net/anveksha?retryWrites=true&w=majority
+#   CLOUD (default) — set the full Atlas srv URI:
+#     MONGODB_URI=mongodb+srv://<user>:<pass>@<cluster>.mongodb.net/anveksha?retryWrites=true&w=majority&appName=ReverseHR
+#     docker compose -f docker-compose.cloud.yml up --build
 #
-# Then bring the whole stack up with:
+#   LOCAL dev — run a throwaway mongo container instead of the cloud:
+#     leave MONGODB_URI unset (the API builds the URI from MONGODB_USERNAME/
+#     MONGODB_PASSWORD/MONGODB_DB_NAME against the `mongo` service), then:
+#     docker compose -f docker-compose.cloud.yml --profile local up --build
 #
-#   docker compose -f docker-compose.cloud.yml up --build
-#
-# - api  → FastAPI backend, talks to Atlas (MONGO_URI overrides the
-#          component-built URI; the local `mongo` service is intentionally
-#          absent here).
-# - web  → the React SPA built by Vite and served by nginx, which also
-#          reverse-proxies /api → api:8000 (single origin, no CORS).
-#
-# The frontend build is parametrised: empty VITE_API_BASE_URL makes the SPA
-# use relative URLs so calls land on nginx and get proxied to the backend.
+# - api  → FastAPI backend. MONGODB_URI (if set) wins; otherwise it builds
+#          mongodb://<user>:<pass>@mongo:27017/<db> for the local profile.
+# - web  → React SPA built by Vite, served by nginx, which reverse-proxies
+#          /api → api:8000 (single origin, no CORS).
+# - mongo→ only started with `--profile local`; absent for cloud.
 
 services:
+  mongo:
+    profiles: ["local"]
+    image: mongo:7
+    container_name: anveksha-mongo-local
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: "${MONGODB_USERNAME:-anveksha}"
+      MONGO_INITDB_ROOT_PASSWORD: "${MONGODB_PASSWORD:-changeme}"
+      MONGO_INITDB_DATABASE: "${MONGODB_DB_NAME:-anveksha}"
+    # No host port published — the API reaches mongo over the internal
+    # compose network (mongo:27017). Uncomment to inspect with Compass, and
+    # pick a free host port if 27017 is taken (e.g. "27018:27017").
+    # ports:
+    #   - "27018:27017"
+    volumes:
+      - mongo_local_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   api:
     build:
       context: .
@@ -28,10 +50,14 @@ services:
     restart: unless-stopped
     env_file:
       - .env
-    # MONGO_URI comes from .env (env_file above). Do NOT set MONGO_HOST here
-    # — that would steer the API at a non-existent local mongo service.
     ports:
       - "${PORT:-8000}:8000"
+    depends_on:
+      # Only enforced when the `local` profile is active (compose required:false);
+      # for the cloud default the mongo service isn't started and this is skipped.
+      mongo:
+        condition: service_healthy
+        required: false
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
       interval: 15s
@@ -48,8 +74,6 @@ services:
         # them to the api service. MSW off so it's all real backend.
         VITE_API_BASE_URL: ""
         VITE_ENABLE_MSW: "false"
-        # Pulled from this directory's .env so the GoogleLogin button's
-        # client id matches the backend's audience check.
         VITE_GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"
     image: anveksha-web:cloud
     container_name: anveksha-web
@@ -59,3 +83,6 @@ services:
         condition: service_healthy
     ports:
       - "${WEB_PORT:-5173}:80"
+
+volumes:
+  mongo_local_data:
