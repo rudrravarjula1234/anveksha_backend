@@ -1,0 +1,61 @@
+# Cloud-Mongo stack: API + web SPA, NO on-prem MongoDB.
+#
+# The backend connects to a managed MongoDB (Atlas) via MONGO_URI — set it
+# in `.env` in this directory:
+#
+#   MONGO_URI=mongodb+srv://<user>:<pass>@<cluster>.mongodb.net/anveksha?retryWrites=true&w=majority
+#
+# Then bring the whole stack up with:
+#
+#   docker compose -f docker-compose.cloud.yml up --build
+#
+# - api  → FastAPI backend, talks to Atlas (MONGO_URI overrides the
+#          component-built URI; the local `mongo` service is intentionally
+#          absent here).
+# - web  → the React SPA built by Vite and served by nginx, which also
+#          reverse-proxies /api → api:8000 (single origin, no CORS).
+#
+# The frontend build is parametrised: empty VITE_API_BASE_URL makes the SPA
+# use relative URLs so calls land on nginx and get proxied to the backend.
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: anveksha-api:cloud
+    container_name: anveksha-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    # MONGO_URI comes from .env (env_file above). Do NOT set MONGO_HOST here
+    # — that would steer the API at a non-existent local mongo service.
+    ports:
+      - "${PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 25s
+
+  web:
+    build:
+      context: ../anveksha_ui
+      dockerfile: Dockerfile
+      args:
+        # Relative API base → axios uses same-origin URLs → nginx proxies
+        # them to the api service. MSW off so it's all real backend.
+        VITE_API_BASE_URL: ""
+        VITE_ENABLE_MSW: "false"
+        # Pulled from this directory's .env so the GoogleLogin button's
+        # client id matches the backend's audience check.
+        VITE_GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"
+    image: anveksha-web:cloud
+    container_name: anveksha-web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-5173}:80"
