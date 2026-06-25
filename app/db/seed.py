@@ -183,3 +183,8 @@ async def run_seeds() -> None:
     n_agents = await seed_agent_registry()
     if n_agents:
         log.info("Seeded %d agent config(s).", n_agents)
+    from app.db.seed_metrics import seed_metrics
+
+    n_metrics = await seed_metrics()
+    if n_metrics:
+        log.info("Seeded %d metrics doc(s).", n_metrics)

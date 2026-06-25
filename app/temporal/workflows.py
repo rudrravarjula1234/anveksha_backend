@@ -34,9 +34,11 @@ class AgentTaskWorkflow:
         from app.temporal.activities import (
             notify_workflow_completed,
             notify_workflow_failed,
+            record_workflow_finished,
             run_agent_activity,
         )
 
+        wf_id = workflow.info().workflow_id
         self._status = "running"
         try:
             result = await workflow.execute_activity(
@@ -46,19 +48,29 @@ class AgentTaskWorkflow:
                 retry_policy=RetryPolicy(maximum_attempts=3),
             )
             self._status = "completed"
+            await workflow.execute_activity(
+                record_workflow_finished,
+                args=[wf_id, "completed"],
+                start_to_close_timeout=timedelta(seconds=10),
+            )
             if user_id:
                 await workflow.execute_activity(
                     notify_workflow_completed,
-                    args=[user_id, workflow.info().workflow_id, agent_id, "Agent run complete"],
+                    args=[user_id, wf_id, agent_id, "Agent run complete"],
                     start_to_close_timeout=timedelta(seconds=10),
                 )
             return result
         except Exception as exc:  # noqa: BLE001 — report failure, then re-raise for Temporal
             self._status = "failed"
+            await workflow.execute_activity(
+                record_workflow_finished,
+                args=[wf_id, "failed"],
+                start_to_close_timeout=timedelta(seconds=10),
+            )
             if user_id:
                 await workflow.execute_activity(
                     notify_workflow_failed,
-                    args=[user_id, workflow.info().workflow_id, str(exc)],
+                    args=[user_id, wf_id, str(exc)],
                     start_to_close_timeout=timedelta(seconds=10),
                 )
             raise

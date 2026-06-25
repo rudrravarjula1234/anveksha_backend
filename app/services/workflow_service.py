@@ -36,6 +36,11 @@ async def start_agent_workflow(
         id=wf_id,
         task_queue=settings.TEMPORAL_TASK_QUEUE,
     )
+    # Ledger the run so the admin dashboard can count it even though
+    # Temporal's own visibility store isn't queried by the API.
+    from app.services.workflow_runs_service import record_started
+
+    await record_started(handle.id, agent_id, user_id)
     log.info("Started workflow %s (agent=%s)", handle.id, agent_id)
     return {"workflowId": handle.id, "status": "started"}
 

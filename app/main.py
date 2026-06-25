@@ -30,6 +30,7 @@ from app.api import (
 from app.api.admin import assessments as admin_assessments
 from app.api.admin import bots as admin_bots
 from app.api.admin import coupons as admin_coupons
+from app.api.admin import metrics as admin_metrics
 from app.api.admin import models as admin_models
 from app.api.admin import ops as admin_ops
 from app.core.config import get_settings
@@ -135,6 +136,8 @@ def create_app() -> FastAPI:
     # companies, integrity, analytics, flags, rbac, pilots).
     app.include_router(admin_ops.router, prefix="/api/admin")
     app.include_router(admin_ops.bots_simple_router, prefix="/api/bots")
+    # Platform dashboard — agent/bot/model/user counts, token usage, workflow stats.
+    app.include_router(admin_metrics.router, prefix="/api/admin/metrics")
     # Agentic framework: status, credentials, token usage, feedback.
     app.include_router(agents_api.router, prefix="/api/agents")
     # Agent registry (admin settings) + agent-powered feature endpoints.

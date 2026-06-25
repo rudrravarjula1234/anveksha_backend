@@ -65,10 +65,25 @@ async def notify_workflow_failed(user_id: str, workflow_id: str, error: str) -> 
     return True
 
 
+@activity.defn
+async def record_workflow_finished(workflow_id: str, status: str) -> bool:
+    """Persist a workflow's terminal state to the `workflow_runs` ledger.
+
+    Separate from the WebSocket notifications (which gate on user_id) so the
+    admin dashboard's workflow counts are always recorded, even for runs with
+    no subscriber.
+    """
+    from app.services.workflow_runs_service import record_finished
+
+    await record_finished(workflow_id, status)
+    return True
+
+
 # Registered on the worker (see worker_main.py). Kept as a module list so
 # the worker and tests share one source of truth.
 ALL_ACTIVITIES = [
     run_agent_activity,
     notify_workflow_completed,
     notify_workflow_failed,
+    record_workflow_finished,
 ]
