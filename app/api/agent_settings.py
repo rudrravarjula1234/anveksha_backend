@@ -107,3 +107,29 @@ async def gray_analysis(
         "gray_analyzer",
         {"task": "Identify and rank never-tested (gray) areas.", **body},
     )
+
+
+@shared_router.post("/gap-analysis", response_model=AgentRunResult)
+async def gap_analysis(
+    body: dict[str, Any] = Body(default_factory=dict),
+    service: AgentRegistryService = Depends(_service),
+) -> AgentRunResult:
+    """Gap analysis — tested-and-weak areas with transcript citations. Used by
+    the verifier report editor and the candidate skill-report detail page."""
+    return await service.run_agent(
+        "gap_analyzer",
+        {"task": "Identify tested-and-weak gap areas, each grounded in evidence.", **body},
+    )
+
+
+@shared_router.post("/candidate-search", response_model=AgentRunResult)
+async def candidate_search(
+    body: dict[str, Any] = Body(default_factory=dict),
+    service: AgentRegistryService = Depends(_service),
+) -> AgentRunResult:
+    """Natural-language candidate ranking for company discovery. Privacy-aware:
+    the agent presents aliases until a candidate is unlocked."""
+    return await service.run_agent(
+        "candidate_search",
+        {"task": "Rank the verified pool against this hiring need.", **body},
+    )
