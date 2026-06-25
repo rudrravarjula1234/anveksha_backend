@@ -15,7 +15,18 @@ from fastapi.responses import JSONResponse
 from app import __version__
 from app.api import agent_settings
 from app.api import agents as agents_api
-from app.api import approvals, auth, candidate, catalog, company, health, portal, skills, verifier
+from app.api import (
+    approvals,
+    auth,
+    candidate,
+    catalog,
+    company,
+    health,
+    portal,
+    skills,
+    verifier,
+    workflows,
+)
 from app.api.admin import assessments as admin_assessments
 from app.api.admin import bots as admin_bots
 from app.api.admin import coupons as admin_coupons
@@ -55,6 +66,11 @@ async def lifespan(_app: FastAPI):
     try:
         yield
     finally:
+        # Temporal client is lazily created (may never be); close is a no-op
+        # if it was never connected or the SDK isn't installed.
+        from app.temporal.client import close_temporal_client
+
+        await close_temporal_client()
         await close_mongo()
 
 
@@ -107,6 +123,8 @@ def create_app() -> FastAPI:
     app.include_router(candidate.router, prefix="/api")
     # Portal router spans /api/privacy, /api/dossier and /api/interviews.
     app.include_router(portal.router, prefix="/api")
+    # Durable agent workflows (Temporal) — degrades to 503 without a worker.
+    app.include_router(workflows.router, prefix="/api/workflows")
     app.include_router(approvals.admin_router, prefix="/api/admin/interviewer-approvals")
     app.include_router(approvals.specialists_router, prefix="/api/admin/specialists")
     app.include_router(approvals.candidate_router, prefix="/api/candidate")

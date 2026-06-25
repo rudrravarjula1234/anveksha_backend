@@ -53,6 +53,15 @@ class Settings(BaseSettings):
     JWT_ACCESS_TTL_MIN: int = Field(default=60)
     JWT_REFRESH_TTL_DAYS: int = Field(default=14)
 
+    # ─── Temporal (durable agent workflows) ──────────────────────────────
+    # Optional. The app boots and serves inline agents without Temporal;
+    # the /api/workflows/* endpoints return 503 until a Temporal server is
+    # reachable AND the `temporalio` extra is installed. The worker runs as
+    # a separate process (docker service `temporal-worker`).
+    TEMPORAL_HOST: str = Field(default="localhost:7233")
+    TEMPORAL_NAMESPACE: str = Field(default="default")
+    TEMPORAL_TASK_QUEUE: str = Field(default="anveksha-agents")
+
     # ─── Google OAuth ────────────────────────────────────────────────────
     GOOGLE_CLIENT_ID: Optional[str] = Field(
         default=None,

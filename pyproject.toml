@@ -32,6 +32,12 @@ agents = [
   "autogen-ext[openai,anthropic,azure,ollama,mcp]==0.7.5",
   "tiktoken>=0.5.0",
 ]
+# Durable workflow extra (app/temporal). The API boots without it; the
+# /api/workflows/* endpoints return 503 and the worker can't start until
+# installed. Pin matches the legacy backend.
+temporal = [
+  "temporalio>=1.7.0",
+]
 
 [tool.ruff]
 line-length = 100

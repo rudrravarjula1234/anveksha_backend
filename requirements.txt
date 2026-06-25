@@ -21,3 +21,10 @@ cryptography>=42.0.0  # Fernet encryption for provider credentials (app/agents/c
 # autogen-agentchat==0.7.5
 # autogen-ext[openai,anthropic,azure,ollama,mcp]==0.7.5
 # tiktoken>=0.5.0          # exact token counting for OpenAI models (optional)
+
+# ── Durable workflows (app/temporal) ────────────────────────────────────────
+# Enabled in the Docker images so the worker runs and /api/workflows/* works
+# against the `temporal` compose service. The API still boots without it
+# (imports are guarded); the hermetic pytest run omits it to exercise the
+# 503-degradation path.
+temporalio>=1.7.0
