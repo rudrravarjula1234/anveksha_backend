@@ -38,6 +38,17 @@ async def lifespan(_app: FastAPI):
     settings = get_settings()
     setup_logging(settings.LOG_LEVEL)
     log.info("Starting %s v%s (DEBUG=%s)", settings.PROJECT_NAME, __version__, settings.DEBUG)
+    # Auth today is entirely dev-token based (issued by google-register +
+    # dev-login, accepted only when DEBUG=true). Real JWT issuance/acceptance
+    # is not implemented yet, so GOOGLE_CLIENT_ID set with DEBUG=false yields
+    # a successful sign-in whose follow-up requests 401. Warn loudly until the
+    # JWT path lands. See app/auth/deps.py (the `# Future: real JWT` branch).
+    if settings.GOOGLE_CLIENT_ID and not settings.DEBUG:
+        log.warning(
+            "GOOGLE_CLIENT_ID is set but DEBUG=false — real Google sign-in is "
+            "NOT functional yet (issued dev tokens are rejected when DEBUG=false). "
+            "Run with DEBUG=true until the production JWT path is implemented."
+        )
     await connect_to_mongo()
     await ensure_indexes()
     await run_seeds()
