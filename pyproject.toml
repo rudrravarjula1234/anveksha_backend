@@ -7,6 +7,8 @@ dependencies = [
   "fastapi[standard]>=0.115.0",
   "uvicorn[standard]>=0.30.0",
   "motor>=3.5.0",
+  # pymongo needs dnspython to resolve mongodb+srv:// (Atlas) connection strings.
+  "dnspython>=2.6.0",
   "pydantic>=2.7.0",
   "pydantic-settings>=2.4.0",
   "python-ulid>=2.7.0",
@@ -31,6 +33,12 @@ agents = [
   "autogen-agentchat==0.7.5",
   "autogen-ext[openai,anthropic,azure,ollama,mcp]==0.7.5",
   "tiktoken>=0.5.0",
+]
+# Durable workflow extra (app/temporal). The API boots without it; the
+# /api/workflows/* endpoints return 503 and the worker can't start until
+# installed. Pin matches the legacy backend.
+temporal = [
+  "temporalio>=1.7.0",
 ]
 
 [tool.ruff]

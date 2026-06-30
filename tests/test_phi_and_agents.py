@@ -169,6 +169,32 @@ async def test_gray_analysis_any_authenticated(client: AsyncClient):
 
 
 @pytest.mark.asyncio
+async def test_gap_analysis_any_authenticated(client: AsyncClient):
+    r = await client.post(
+        "/api/agents/gap-analysis",
+        json={"candidateId": "usr_cand_001"},
+        headers=_hdr(*CANDIDATE),
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["agentId"] == "gap_analyzer"
+    assert "Gap analysis" in body["output"]
+
+
+@pytest.mark.asyncio
+async def test_candidate_search_company_only(client: AsyncClient):
+    r = await client.post(
+        "/api/agents/candidate-search",
+        json={"query": "kafka at scale"},
+        headers=_hdr(*COMPANY),
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["agentId"] == "candidate_search"
+    assert "kafka at scale" in body["output"]
+
+
+@pytest.mark.asyncio
 async def test_chat_uses_alias_for_locked_candidate(client: AsyncClient):
     r = await client.post(
         "/api/companies/chat",

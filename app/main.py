@@ -15,10 +15,22 @@ from fastapi.responses import JSONResponse
 from app import __version__
 from app.api import agent_settings
 from app.api import agents as agents_api
-from app.api import approvals, auth, candidate, catalog, company, health, portal, skills, verifier
+from app.api import (
+    approvals,
+    auth,
+    candidate,
+    catalog,
+    company,
+    health,
+    portal,
+    skills,
+    verifier,
+    workflows,
+)
 from app.api.admin import assessments as admin_assessments
 from app.api.admin import bots as admin_bots
 from app.api.admin import coupons as admin_coupons
+from app.api.admin import metrics as admin_metrics
 from app.api.admin import models as admin_models
 from app.api.admin import ops as admin_ops
 from app.core.config import get_settings
@@ -38,12 +50,28 @@ async def lifespan(_app: FastAPI):
     settings = get_settings()
     setup_logging(settings.LOG_LEVEL)
     log.info("Starting %s v%s (DEBUG=%s)", settings.PROJECT_NAME, __version__, settings.DEBUG)
+    # Auth today is entirely dev-token based (issued by google-register +
+    # dev-login, accepted only when DEBUG=true). Real JWT issuance/acceptance
+    # is not implemented yet, so GOOGLE_CLIENT_ID set with DEBUG=false yields
+    # a successful sign-in whose follow-up requests 401. Warn loudly until the
+    # JWT path lands. See app/auth/deps.py (the `# Future: real JWT` branch).
+    if settings.GOOGLE_CLIENT_ID and not settings.DEBUG:
+        log.warning(
+            "GOOGLE_CLIENT_ID is set but DEBUG=false — real Google sign-in is "
+            "NOT functional yet (issued dev tokens are rejected when DEBUG=false). "
+            "Run with DEBUG=true until the production JWT path is implemented."
+        )
     await connect_to_mongo()
     await ensure_indexes()
     await run_seeds()
     try:
         yield
     finally:
+        # Temporal client is lazily created (may never be); close is a no-op
+        # if it was never connected or the SDK isn't installed.
+        from app.temporal.client import close_temporal_client
+
+        await close_temporal_client()
         await close_mongo()
 
 
@@ -96,6 +124,8 @@ def create_app() -> FastAPI:
     app.include_router(candidate.router, prefix="/api")
     # Portal router spans /api/privacy, /api/dossier and /api/interviews.
     app.include_router(portal.router, prefix="/api")
+    # Durable agent workflows (Temporal) — degrades to 503 without a worker.
+    app.include_router(workflows.router, prefix="/api/workflows")
     app.include_router(approvals.admin_router, prefix="/api/admin/interviewer-approvals")
     app.include_router(approvals.specialists_router, prefix="/api/admin/specialists")
     app.include_router(approvals.candidate_router, prefix="/api/candidate")
@@ -106,6 +136,8 @@ def create_app() -> FastAPI:
     # companies, integrity, analytics, flags, rbac, pilots).
     app.include_router(admin_ops.router, prefix="/api/admin")
     app.include_router(admin_ops.bots_simple_router, prefix="/api/bots")
+    # Platform dashboard — agent/bot/model/user counts, token usage, workflow stats.
+    app.include_router(admin_metrics.router, prefix="/api/admin/metrics")
     # Agentic framework: status, credentials, token usage, feedback.
     app.include_router(agents_api.router, prefix="/api/agents")
     # Agent registry (admin settings) + agent-powered feature endpoints.

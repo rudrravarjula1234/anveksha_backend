@@ -76,12 +76,10 @@ class AuthService:
     async def _default_user_for_role(self, role: UserRole) -> Optional[dict]:
         """The persona the dev-login button for `role` should land on.
 
-        Sorted by `id` for determinism — the seed ids are stable
-        (usr_cand_001 etc.) so this matches the frontend's keyed lookup.
-        Specialist (usr_spec_001) intentionally never wins a role-based
-        lookup because Maya (usr_ver_001) sorts after... actually `usr_spec`
-        sorts before `usr_ver`, so we exclude the specialist explicitly:
-        she is only reachable via explicit userId, same as the frontend.
+        Deterministic: results are sorted by stable seed `id` (usr_cand_001,
+        etc.) to match the frontend's keyed lookup. The specialist
+        (usr_spec_001) is excluded from role-based resolution — she is only
+        reachable via an explicit userId, same as the frontend.
         """
         cursor = self._users().find({"roles": role})
         candidates = await cursor.to_list(length=50)

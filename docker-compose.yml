@@ -42,6 +42,7 @@ services:
       # have to point host + port at the Compose service.
       MONGO_HOST: mongo
       MONGO_PORT: 27017
+      TEMPORAL_HOST: temporal:7233
     ports:
       - "${PORT:-8000}:8000"
     depends_on:
@@ -54,6 +55,62 @@ services:
       retries: 5
       start_period: 15s
 
+  # ── Temporal (durable agent workflows) ──────────────────────────────────────
+  temporal-db:
+    image: postgres:16-alpine
+    container_name: anveksha-temporal-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+      POSTGRES_DB: temporal
+    volumes:
+      - temporal_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  temporal:
+    image: temporalio/auto-setup:1.25.0
+    container_name: anveksha-temporal
+    restart: unless-stopped
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - POSTGRES_SEEDS=temporal-db
+    ports:
+      - "7233:7233"
+    depends_on:
+      temporal-db:
+        condition: service_healthy
+
+  # Durable worker — runs the AgentTaskWorkflow + activities. Same image as
+  # the API, different entrypoint. Needs Mongo (activities read agent config)
+  # and Temporal.
+  temporal-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: anveksha-temporal-worker
+    restart: unless-stopped
+    command: ["python", "-m", "app.temporal.worker_main"]
+    env_file:
+      - .env
+    environment:
+      MONGO_HOST: mongo
+      MONGO_PORT: 27017
+      TEMPORAL_HOST: temporal:7233
+    depends_on:
+      mongo:
+        condition: service_healthy
+      temporal:
+        condition: service_started
+
 volumes:
   mongo_data:
   mongo_config:
+  temporal_db:
