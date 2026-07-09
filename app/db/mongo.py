@@ -7,6 +7,7 @@ shutdown. Repositories pick up the live database handle via
 
 import logging
 from typing import Optional
+from urllib.parse import urlsplit
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
@@ -34,7 +35,11 @@ async def connect_to_mongo() -> None:
         return
 
     settings = get_settings()
-    log.info("Connecting to MongoDB at %s/%s", settings.MONGO_HOST, settings.MONGO_DATABASE)
+    # Log the REAL target host (parsed from the resolved URI) so cloud vs
+    # local is obvious — MONGO_HOST is meaningless when MONGO_URI/MONGODB_URI
+    # is set. Credentials are never part of the parsed hostname.
+    target_host = urlsplit(settings.mongo_connection_uri).hostname or settings.MONGO_HOST
+    log.info("Connecting to MongoDB at %s/%s", target_host, settings.MONGO_DATABASE)
 
     _state.client = AsyncIOMotorClient(
         settings.mongo_connection_uri,
