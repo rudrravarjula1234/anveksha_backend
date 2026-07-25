@@ -50,6 +50,11 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      # Reach the temporal server over the compose network so /api/workflows/*
+      # is functional. The API connects lazily and degrades to 503 if temporal
+      # is down, so it does NOT depend_on temporal (starts independently).
+      TEMPORAL_HOST: temporal:7233
     ports:
       - "${PORT:-8000}:8000"
     depends_on:
@@ -84,5 +89,57 @@ services:
     ports:
       - "${WEB_PORT:-5173}:80"
 
+  # ── Temporal (durable agent workflows, used by /api/workflows/*) ─────────
+  temporal-db:
+    image: postgres:16-alpine
+    container_name: anveksha-temporal-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+      POSTGRES_DB: temporal
+    volumes:
+      - temporal_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  temporal:
+    image: temporalio/auto-setup:1.25.0
+    container_name: anveksha-temporal
+    restart: unless-stopped
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - POSTGRES_SEEDS=temporal-db
+    ports:
+      - "7233:7233"
+    depends_on:
+      temporal-db:
+        condition: service_healthy
+
+  # Durable worker — same image as the API, different entrypoint. Talks to
+  # cloud Mongo (MONGODB_URI from .env) + the temporal server.
+  temporal-worker:
+    image: anveksha-api:cloud
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: anveksha-temporal-worker
+    restart: unless-stopped
+    command: ["python", "-m", "app.temporal.worker_main"]
+    env_file:
+      - .env
+    environment:
+      TEMPORAL_HOST: temporal:7233
+    depends_on:
+      temporal:
+        condition: service_started
+
 volumes:
   mongo_local_data:
+  temporal_db:
