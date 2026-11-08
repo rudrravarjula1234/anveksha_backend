@@ -1,14 +1,8 @@
-import base64
-import json
 
 import pytest
 from httpx import AsyncClient
 
-
-def _hdr(sub: str, role: str) -> dict[str, str]:
-    raw = json.dumps({"sub": sub, "role": role, "iat": 1700000000000})
-    return {"Authorization": "Bearer dev_" + base64.b64encode(raw.encode()).decode()}
-
+from tests.helpers import hdr as _hdr
 
 VERIFIER = ("usr_ver_001", "interviewer")
 CANDIDATE = ("usr_cand_001", "candidate")
@@ -88,6 +82,30 @@ async def test_publish_removes_from_pending(client: AsyncClient):
     assert r.json() == {"ok": True, "status": "published"}
     r = await client.get("/api/verifier/pending-reports", headers=_hdr(*VERIFIER))
     assert all(p["id"] != "rpt_002" for p in r.json())
+
+
+@pytest.mark.asyncio
+async def test_publish_syncs_linked_candidate_report(client: AsyncClient):
+    """rpt_001 links to skill_report_details SVR-KAF-88421 (same report,
+    verifier's working copy vs the candidate-facing view) — publishing a
+    score change must propagate, not leave the two permanently
+    disconnected. `verdict` deliberately does NOT sync (session_reports'
+    is a short tag, skill_report_details' is a prose summary sentence —
+    different content, not a reformatted copy of the same fact)."""
+    r = await client.patch(
+        "/api/verifier/reports/rpt_001", headers=_hdr(*VERIFIER),
+        json={"overallScore": 91},
+    )
+    assert r.status_code == 200
+
+    r = await client.post("/api/verifier/reports/rpt_001/publish", headers=_hdr(*VERIFIER))
+    assert r.json() == {"ok": True, "status": "published"}
+
+    r = await client.get(
+        "/api/candidate/skill-reports/SVR-KAF-88421", headers=_hdr(*CANDIDATE)
+    )
+    assert r.status_code == 200
+    assert r.json()["score"] == 91
 
 
 @pytest.mark.asyncio

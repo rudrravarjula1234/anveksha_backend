@@ -1,14 +1,8 @@
-import base64
-import json
 
 import pytest
 from httpx import AsyncClient
 
-
-def _hdr(sub: str, role: str) -> dict[str, str]:
-    raw = json.dumps({"sub": sub, "role": role, "iat": 1700000000000})
-    return {"Authorization": "Bearer dev_" + base64.b64encode(raw.encode()).decode()}
-
+from tests.helpers import hdr as _hdr
 
 ADMIN = ("usr_adm_001", "admin")
 AARAV = ("usr_cand_001", "candidate")
@@ -67,6 +61,21 @@ async def test_reject_flow(client: AsyncClient):
     )
     assert r.status_code == 200
     assert r.json()["status"] == "rejected"
+
+
+@pytest.mark.asyncio
+async def test_decision_is_final(client: AsyncClient):
+    """A rejected request can't be approved later (that would grant the
+    authority) and an approved one can't be quietly re-rejected."""
+    url = "/api/admin/interviewer-approvals/apr_003"
+    r = await client.post(f"{url}/reject", json={"note": "No."}, headers=_hdr(*ADMIN))
+    assert r.status_code == 200
+    for action in ("approve", "reject"):
+        r = await client.post(f"{url}/{action}", headers=_hdr(*ADMIN))
+        assert r.status_code == 409, r.text
+    r = await client.get("/api/admin/interviewer-approvals", headers=_hdr(*ADMIN))
+    row = next(a for a in r.json()["approvals"] if a["id"] == "apr_003")
+    assert (row["status"], row["decisionNote"]) == ("rejected", "No.")
 
 
 @pytest.mark.asyncio

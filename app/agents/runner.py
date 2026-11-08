@@ -13,9 +13,12 @@ import json
 import logging
 from typing import Any, Optional
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.agents.autogen_compat import AUTOGEN_AVAILABLE
 from app.agents.credentials import get_credential
 from app.agents.model_config_adapter import admin_model_to_config
+from app.models.ai_model import AIModel
 
 log = logging.getLogger(__name__)
 
@@ -37,17 +40,18 @@ def _context_to_prompt(context: dict[str, Any]) -> str:
 async def run_single_agent(
     *,
     system_message: str,
-    model_doc: dict[str, Any],
+    model: AIModel,
     temperature: float,
     context: dict[str, Any],
+    db: Optional[AsyncSession] = None,
 ) -> Optional[str]:
     """One-shot completion. None → caller should use its fallback."""
     if not AUTOGEN_AVAILABLE:
         return None
 
-    config = admin_model_to_config(model_doc)
+    config = admin_model_to_config(model)
     provider_name = config.get("model_provider")
-    credential = await get_credential(provider_name or "")
+    credential = await get_credential(provider_name or "", db=db)
     if not credential or not credential.get("api_key"):
         log.info("No credential for provider %s — falling back.", provider_name)
         return None

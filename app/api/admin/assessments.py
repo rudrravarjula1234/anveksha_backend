@@ -10,8 +10,10 @@ variant is a projection. Response conventions match the mocks:
 """
 
 from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.deps import require_roles
+from app.db.session import get_session
 from app.schemas.assessment import (
     AdminAssessment,
     AssessmentFull,
@@ -30,8 +32,8 @@ router_slim = APIRouter(
 )
 
 
-def _service() -> AssessmentService:
-    return AssessmentService()
+def _service(db: AsyncSession = Depends(get_session)) -> AssessmentService:
+    return AssessmentService(db)
 
 
 # ─── Full variant ────────────────────────────────────────────────────────

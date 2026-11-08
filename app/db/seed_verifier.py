@@ -1,15 +1,18 @@
 """Verifier seed data — mirror of verifier.ts + verifierOps.ts.
 
-Singletons (queue, brief, governance, earnings, profile) are stored as
-one document each with `key: "default"` — multi-verifier support later
-swaps the key for the verifier's user id.
+Singletons (brief, governance, earnings, profile) are stored as one row
+each with `id = "default"` — multi-verifier support later swaps the id
+for the verifier's user id. `queue`'s `live`/`upcoming`/`completed`
+sessions are real `verifier_sessions` rows; its stats tile has no table
+of its own — see app/models/verifier.py's module docstring.
 """
 
-from app.db.mongo import get_database
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.timefmt import parse_wire
 
 QUEUE: dict = {
     "key": "default",
-    "stats": {"rating": 4.9, "sessionCount": 247, "reliability": 98, "earnings": 84200},
     "live": [
         {
             "id": "ses_l1",
@@ -251,42 +254,138 @@ PROFILE: dict = {
     ],
 }
 
-_SINGLETONS = [
-    ("verifier_queue", QUEUE),
-    ("verifier_brief", BRIEF),
-    ("verifier_suggested_gaps", SUGGESTED_GAPS),
-    ("verifier_governance", GOVERNANCE),
-    ("verifier_earnings", EARNINGS),
-    ("verifier_profile", PROFILE),
-]
+async def seed_verifier(db: AsyncSession) -> int:
+    from app.models.verifier import (
+        PendingReport,
+        SessionReport,
+        SuggestedGap,
+        VerifierConsoleState,
+        VerifierSession,
+        VerifierSlot,
+    )
 
-
-async def seed_verifier() -> int:
-    db = get_database()
     inserted = 0
 
-    for coll_name, template in _SINGLETONS:
-        coll = db[coll_name]
-        if not await coll.find_one({"key": "default"}):
-            await coll.insert_one(dict(template))
+    for lane in ("live", "upcoming", "completed"):
+        for item in QUEUE[lane]:
+            if await db.get(VerifierSession, item["id"]):
+                continue
+            db.add(
+                VerifierSession(
+                    id=item["id"], lane=lane, raw_id=item["rawId"], time=item["time"], date=item["date"],
+                    candidate=item["candidate"], candidate_initials=item["candidateInitials"],
+                    skill=item["skill"], duration=item["duration"], status=item["status"],
+                    tags=item.get("tags", []), depth=item.get("depth", ""),
+                )
+            )
             inserted += 1
 
-    pending = db["pending_reports"]
+    if not await db.get(VerifierConsoleState, "default"):
+        row = VerifierConsoleState(
+            id="default", session_id=BRIEF["sessionId"], candidate=BRIEF["candidate"],
+            skill=BRIEF["skill"], summary=BRIEF["summary"],
+            prioritized_probes=BRIEF["prioritizedProbes"], gray_requested=BRIEF["grayRequested"],
+            reliability=GOVERNANCE["reliability"], score_variance=GOVERNANCE["scoreVariance"],
+            candidate_rating=GOVERNANCE["candidateRating"], appeal_rate=GOVERNANCE["appealRate"],
+            average_review_time_min=GOVERNANCE["averageReviewTimeMin"],
+            current_month=EARNINGS["currentMonth"], current_amount=EARNINGS["currentAmount"],
+            current_sessions=EARNINGS["currentSessions"], ytd_amount=EARNINGS["ytdAmount"],
+            ytd_sessions=EARNINGS["ytdSessions"], rate_standard=EARNINGS["rateStandard"],
+            rate_advanced=EARNINGS["rateAdvanced"], pending=EARNINGS["pending"],
+            name=PROFILE["name"], title=PROFILE["title"],
+            years_experience=PROFILE["yearsExperience"], rating=PROFILE["rating"],
+            sessions=PROFILE["sessions"], bio=PROFILE["bio"], linkedin=PROFILE["linkedin"],
+            language=PROFILE["language"], specializations=PROFILE["specializations"],
+            pending_reports=PROFILE["pendingReports"],
+        )
+        row.signals = [
+            {"signal_id": s["id"], "name": s["name"], "value": s["value"], "target": s["target"]}
+            for s in GOVERNANCE["signals"]
+        ]
+        # r1 is the same report as session_reports rpt_001 (Aarav/Kafka/76)
+        # — the only recentReports entry with a known session_reports match.
+        _session_report_links = {"r1": "rpt_001"}
+        row.recent_reports = [
+            {
+                "report_id": r["id"], "candidate": r["candidate"], "skill": r["skill"], "date": r["date"],
+                "verdict": r["verdict"], "score": r["score"],
+                "session_report_id": _session_report_links.get(r["id"]),
+            }
+            for r in GOVERNANCE["recentReports"]
+        ]
+        row.months = [
+            {
+                "month_id": m["id"], "month": m["month"], "sessions": m["sessions"], "hours": m["hours"],
+                "amount": m["amount"], "status": m["status"],
+            }
+            for m in EARNINGS["months"]
+        ]
+        row.rate_card = [
+            {"row_id": r["id"], "label": r["label"], "value": r["value"]} for r in EARNINGS["rateCard"]
+        ]
+        row.quality = [
+            {"metric_id": q["id"], "metric": q["metric"], "value": q["value"]} for q in PROFILE["quality"]
+        ]
+        db.add(row)
+        inserted += 1
+
+    for item in SUGGESTED_GAPS["gaps"]:
+        if await db.get(SuggestedGap, item["id"]):
+            continue
+        db.add(
+            SuggestedGap(
+                id=item["id"], text=item["text"], sub=item.get("sub", ""),
+                accepted=item.get("accepted", False), note=item.get("note"),
+            )
+        )
+        inserted += 1
+
     for item in PENDING_REPORTS:
-        if not await pending.find_one({"id": item["id"]}):
-            await pending.insert_one(dict(item))
-            inserted += 1
+        if await db.get(PendingReport, item["id"]):
+            continue
+        db.add(
+            PendingReport(
+                id=item["id"], session_id=item["sessionId"], candidate=item["candidate"],
+                initials=item["initials"], skill=item["skill"], date=item["date"], ai_score=item["aiScore"],
+            )
+        )
+        inserted += 1
 
-    reports = db["session_reports"]
     for item in REPORTS:
-        if not await reports.find_one({"id": item["id"]}):
-            await reports.insert_one(dict(item))
-            inserted += 1
+        if await db.get(SessionReport, item["id"]):
+            continue
+        # rpt_001 is the same report as skill_report_details SVR-KAF-88421
+        # (Aarav/Kafka/76) — the only REPORTS entry with a known match.
+        _published_links = {"rpt_001": "SVR-KAF-88421"}
+        row = SessionReport(
+            id=item["id"], session_id=item["sessionId"], candidate_name=item["candidateName"],
+            skill=item["skill"], verdict=item["verdict"], overall_score=item["overallScore"],
+            gray_areas=item.get("grayAreas", []), strengths=item.get("strengths", []),
+            status=item["status"], report_created_at=parse_wire(item["createdAt"]),
+            published_report_id=_published_links.get(item["id"]),
+        )
+        row.sections = [
+            {
+                "section_id": s["id"], "title": s["title"], "ai_score": s["aiScore"],
+                "verifier_score": s.get("verifierScore"), "notes": s.get("notes", ""),
+                "evidence": s.get("evidence", []),
+            }
+            for s in item["sections"]
+        ]
+        db.add(row)
+        inserted += 1
 
-    slots = db["verifier_slots"]
     for item in SLOTS:
-        if not await slots.find_one({"id": item["id"]}):
-            await slots.insert_one(dict(item))
-            inserted += 1
+        if await db.get(VerifierSlot, item["id"]):
+            continue
+        db.add(
+            VerifierSlot(
+                id=item["id"], day=item["day"], time=item["time"], duration=item["duration"],
+                skill=item["skill"], booked=item.get("booked", False), candidate=item.get("candidate"),
+            )
+        )
+        inserted += 1
 
+    if inserted:
+        await db.flush()
     return inserted

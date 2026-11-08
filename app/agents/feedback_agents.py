@@ -7,7 +7,7 @@ transcripts and generating structured feedback using the existing agentic framew
 Ported from ``backend/lib/agent_service/feedback_agents.py``. Port note: each
 config factory now accepts an optional ``model_name`` (default unchanged:
 ``gemini-2.0-flash``) so the orchestration can run against whatever model is
-registered in the new ``ai_models`` collection.
+registered in the ``ai_models`` table.
 """
 
 from typing import Any, Dict, Optional

@@ -1,9 +1,8 @@
-"""Repository for AI model configurations."""
+"""Repository for AI model configurations (Postgres)."""
 
-from app.repositories.base import MongoRepository
-from app.schemas.ai_model import AdminModel
+from app.models.ai_model import AIModel
+from app.repositories.sql_base import SqlRepository
 
 
-class AIModelRepository(MongoRepository[AdminModel]):
-    collection_name = "ai_models"
-    read_model = AdminModel
+class AIModelRepository(SqlRepository[AIModel]):
+    model = AIModel

@@ -1,28 +1,39 @@
-"""Admin ops seed data — mirror of the frontend mock seeds.
-
-Sources (transcribed verbatim):
-- anveksha_ui/src/mocks/data/admin.ts          (dashboard, users, simple
-  bots, simple feature flags, role permissions)
-- anveksha_ui/src/mocks/data/adminWorkflow.ts  (overview, dossiers, slots,
-  verifiers, candidates, companies, integrity, analytics)
-- anveksha_ui/src/mocks/data/featureFlags.ts   (FEATURE_REGISTRY + defaults)
-- anveksha_ui/src/mocks/data/rbac.ts           (ROLE_PERMISSIONS,
-  CUSTOM_ROLES, AUDIT_LOG)
-- anveksha_ui/src/mocks/data/pilotsFull.ts     (pilot programs + students)
-
-Singletons (dashboard, overview, integrity signals, analytics, flag
-registry, flag state) are stored as one document each with
-`key: "default"`. Pilots are stored once in `pilot_programs` with the
-FULL shape; `/api/admin/pilots` projects away `dept`/`assessments`
-(the admin.ts values are identical to the pilotsFull.ts ones).
+"""Admin ops seed data — mirrors the frontend mock seeds (dashboard,
+overview, feature flags, RBAC, pilots). The console singletons
+(dashboard, overview, analytics, integrity signals) share one merged
+row with `id = "singleton"`; see `app/models/admin_ops.py` for the
+table shape.
 """
 
-from app.db.mongo import get_database
+from datetime import datetime
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.admin_ops import (
+    AdminCandidate,
+    AdminCompany,
+    AdminConsoleSnapshot,
+    AdminDossier,
+    AdminFeatureFlag,
+    AdminRolePermission,
+    AdminSlot,
+    AdminVerifier,
+    FlagDef,
+    FlagGroup,
+    FlagState,
+    IntegrityFlag,
+    PilotProgram,
+    PilotStudent,
+    RbacAuditEntry,
+    RbacCustomRole,
+    RbacRole,
+)
+from app.models.bot import Bot as BotModel
+from app.repositories.bot_repo import BotRepository
 
 # ─── Dashboard (admin.ts → adminDashboard) ──────────────────────────────
 
 DASHBOARD: dict = {
-    "key": "default",
     "totalUsers": 3102,
     "activeCandidates": 2847,
     "activeVerifiers": 186,
@@ -31,60 +42,16 @@ DASHBOARD: dict = {
     "reportsThisWeek": 312,
 }
 
-# ─── Users (admin.ts → adminUsers) ──────────────────────────────────────
-
-ADMIN_USERS: list[dict] = [
-    {
-        "id": "usr_cand_001",
-        "email": "aarav.rao@anveksha.dev",
-        "name": "Aarav Rao",
-        "roles": ["candidate"],
-        "is_active": True,
-        "created_at": "2025-08-12T09:00:00.000Z",
-        "last_login": "2026-04-26T11:00:00.000Z",
-    },
-    {
-        "id": "usr_ver_001",
-        "email": "deepa.krishnan@anveksha.dev",
-        "name": "Deepa Krishnan",
-        "roles": ["interviewer"],
-        "is_active": True,
-        "created_at": "2025-07-20T09:00:00.000Z",
-        "last_login": "2026-04-27T08:00:00.000Z",
-    },
-    {
-        "id": "usr_co_001",
-        "email": "priya.menon@northstack.co",
-        "name": "Priya Menon",
-        "roles": ["company", "hr"],
-        "is_active": True,
-        "created_at": "2025-06-15T09:00:00.000Z",
-        "last_login": "2026-04-25T14:00:00.000Z",
-    },
-    {
-        "id": "usr_co_002",
-        "email": "rohan.shah@northstack.co",
-        "name": "Rohan Shah",
-        "roles": ["hr"],
-        "is_active": True,
-        "created_at": "2025-06-15T09:00:00.000Z",
-        "last_login": "2026-04-25T15:00:00.000Z",
-    },
-    {
-        "id": "usr_adm_001",
-        "email": "admin@anveksha.dev",
-        "name": "Anveksha Admin",
-        "roles": ["admin"],
-        "is_active": True,
-        "created_at": "2025-01-01T09:00:00.000Z",
-        "last_login": "2026-04-27T07:00:00.000Z",
-    },
-]
+# Users: previously a separate `admin_users` seed list (ADMIN_USERS) with
+# data that had already drifted from the real seeded users (different
+# names/emails/ids, e.g. a "usr_co_002" that doesn't exist in `users` at
+# all). Removed — AdminOpsService.users() reads the real, merged `users`
+# table (app/db/seed.py's SEED_USERS) directly now.
 
 # ─── Bots — SIMPLE shape (admin.ts → bots) ──────────────────────────────
 #
-# Distinct from the BotFull registry served at /api/admin/bots (collection
-# `bots`); these live in `bots_simple` and back GET/POST /api/bots.
+# Distinct from the BotFull registry served at /api/admin/bots; these
+# live in the merged Postgres `bots` table and back GET/POST /api/bots.
 
 SIMPLE_BOTS: list[dict] = [
     {
@@ -181,25 +148,23 @@ ROLE_PERMISSIONS_SIMPLE: list[dict] = [
 
 # ─── Overview (adminWorkflow.ts → overviewStats + overviewActivity) ─────
 
-OVERVIEW: dict = {
-    "key": "default",
-    "stats": [
-        {"label": "Sessions today", "value": 24, "sub": "↑ 8 vs yesterday", "color": "oxblood"},
-        {"label": "Published dossiers", "value": 2847, "sub": "of 3,102 total"},
-        {"label": "Active verifiers", "value": 186, "sub": "12 new this month"},
-        {"label": "Company accounts", "value": 94, "sub": "8 enterprise seats"},
-        {"label": "Gray signals (30d)", "value": 1204, "sub": "↑ 18% MoM"},
-        {"label": "Integrity flags (30d)", "value": 12, "sub": "3 confirmed fraud"},
-    ],
-    "activity": [
-        {"id": "act_1", "text": "RAW-S-9941 created · Aarav Rao + D. Krishnan", "time": "2m ago", "tone": "oxblood"},
-        {"id": "act_2", "text": "SVR-KAF-88421 published by D. Krishnan", "time": "1h ago", "tone": "verdant"},
-        {"id": "act_3", "text": "Voice biometric mismatch · SVR-8811", "time": "3h ago", "tone": "ochre"},
-        {"id": "act_4", "text": "New company account · TechCorp India", "time": "5h ago", "tone": "sky"},
-        {"id": "act_5", "text": "K. Okonkwo approved as Kafka verifier", "time": "Yesterday", "tone": "ink"},
-        {"id": "act_6", "text": "Session SVR-8721 confirmed fraud · blacklisted", "time": "2d ago", "tone": "oxblood"},
-    ],
-}
+OVERVIEW_STATS: list[dict] = [
+    {"label": "Sessions today", "value": 24, "sub": "↑ 8 vs yesterday", "color": "oxblood"},
+    {"label": "Published dossiers", "value": 2847, "sub": "of 3,102 total", "color": None},
+    {"label": "Active verifiers", "value": 186, "sub": "12 new this month", "color": None},
+    {"label": "Company accounts", "value": 94, "sub": "8 enterprise seats", "color": None},
+    {"label": "Gray signals (30d)", "value": 1204, "sub": "↑ 18% MoM", "color": None},
+    {"label": "Integrity flags (30d)", "value": 12, "sub": "3 confirmed fraud", "color": None},
+]
+
+OVERVIEW_ACTIVITY: list[dict] = [
+    {"id": "act_1", "text": "RAW-S-9941 created · Aarav Rao + D. Krishnan", "time": "2m ago", "tone": "oxblood"},
+    {"id": "act_2", "text": "SVR-KAF-88421 published by D. Krishnan", "time": "1h ago", "tone": "verdant"},
+    {"id": "act_3", "text": "Voice biometric mismatch · SVR-8811", "time": "3h ago", "tone": "ochre"},
+    {"id": "act_4", "text": "New company account · TechCorp India", "time": "5h ago", "tone": "sky"},
+    {"id": "act_5", "text": "K. Okonkwo approved as Kafka verifier", "time": "Yesterday", "tone": "ink"},
+    {"id": "act_6", "text": "Session SVR-8721 confirmed fraud · blacklisted", "time": "2d ago", "tone": "oxblood"},
+]
 
 # ─── Dossiers (adminWorkflow.ts → dossiersSeed) ─────────────────────────
 
@@ -216,22 +181,22 @@ DOSSIERS: list[dict] = [
 
 ADMIN_SLOTS: list[dict] = [
     {"id": "slt_1", "verifier": "D. Krishnan", "day": "Mon Apr 21", "time": "09:00", "duration": 60, "skill": "Kafka", "booked": True, "candidate": "Priya Nair"},
-    {"id": "slt_2", "verifier": "D. Krishnan", "day": "Mon Apr 21", "time": "14:00", "duration": 90, "skill": "System Design", "booked": False},
+    {"id": "slt_2", "verifier": "D. Krishnan", "day": "Mon Apr 21", "time": "14:00", "duration": 90, "skill": "System Design", "booked": False, "candidate": None},
     {"id": "slt_3", "verifier": "S. Mehra", "day": "Mon Apr 21", "time": "11:00", "duration": 60, "skill": ".NET", "booked": True, "candidate": "Omar Haddad"},
-    {"id": "slt_4", "verifier": "S. Mehra", "day": "Tue Apr 22", "time": "10:00", "duration": 60, "skill": "Any", "booked": False},
-    {"id": "slt_5", "verifier": "R. Kapoor", "day": "Wed Apr 23", "time": "09:00", "duration": 60, "skill": "Postgres", "booked": False},
-    {"id": "slt_6", "verifier": "M. Patel", "day": "Thu Apr 24", "time": "11:00", "duration": 90, "skill": "System Design", "booked": False},
+    {"id": "slt_4", "verifier": "S. Mehra", "day": "Tue Apr 22", "time": "10:00", "duration": 60, "skill": "Any", "booked": False, "candidate": None},
+    {"id": "slt_5", "verifier": "R. Kapoor", "day": "Wed Apr 23", "time": "09:00", "duration": 60, "skill": "Postgres", "booked": False, "candidate": None},
+    {"id": "slt_6", "verifier": "M. Patel", "day": "Thu Apr 24", "time": "11:00", "duration": 90, "skill": "System Design", "booked": False, "candidate": None},
     {"id": "slt_7", "verifier": "J. Okafor", "day": "Fri Apr 25", "time": "14:00", "duration": 60, "skill": "Cloud", "booked": True, "candidate": "Li Wei"},
 ]
 
 # ─── Verifiers (adminWorkflow.ts → verifiersSeed) ───────────────────────
 
 ADMIN_VERIFIERS: list[dict] = [
-    {"id": "v_001", "name": "D. Krishnan", "specialization": "Kafka · Systems", "sessions": 247, "rating": 4.9, "quality": "Exemplary", "since": "Jan 2025", "tier": "active"},
-    {"id": "v_002", "name": "S. Mehra", "specialization": ".NET · Microservices", "sessions": 183, "rating": 4.9, "quality": "Exemplary", "since": "Mar 2025", "tier": "active"},
-    {"id": "v_003", "name": "R. Kapoor", "specialization": "Postgres · DBs", "sessions": 142, "rating": 4.8, "quality": "Strong", "since": "Feb 2025", "tier": "active"},
-    {"id": "v_004", "name": "M. Patel", "specialization": "System Design", "sessions": 98, "rating": 4.7, "quality": "Strong", "since": "Jun 2025", "tier": "active"},
-    {"id": "v_005", "name": "J. Okafor", "specialization": "Cloud · AWS", "sessions": 76, "rating": 4.8, "quality": "Strong", "since": "Aug 2025", "tier": "active"},
+    {"id": "v_001", "name": "D. Krishnan", "specialization": "Kafka · Systems", "sessions": 247, "rating": 4.9, "quality": "Exemplary", "since": "Jan 2025", "tier": "active", "experience": None, "applied": None, "sample": None},
+    {"id": "v_002", "name": "S. Mehra", "specialization": ".NET · Microservices", "sessions": 183, "rating": 4.9, "quality": "Exemplary", "since": "Mar 2025", "tier": "active", "experience": None, "applied": None, "sample": None, "linkedUserId": "usr_spec_001"},
+    {"id": "v_003", "name": "R. Kapoor", "specialization": "Postgres · DBs", "sessions": 142, "rating": 4.8, "quality": "Strong", "since": "Feb 2025", "tier": "active", "experience": None, "applied": None, "sample": None},
+    {"id": "v_004", "name": "M. Patel", "specialization": "System Design", "sessions": 98, "rating": 4.7, "quality": "Strong", "since": "Jun 2025", "tier": "active", "experience": None, "applied": None, "sample": None},
+    {"id": "v_005", "name": "J. Okafor", "specialization": "Cloud · AWS", "sessions": 76, "rating": 4.8, "quality": "Strong", "since": "Aug 2025", "tier": "active", "experience": None, "applied": None, "sample": None},
     {"id": "v_a01", "name": "K. Okonkwo", "specialization": "Kafka · Streaming", "sessions": 0, "rating": 0, "quality": "Strong", "since": "—", "tier": "applicants", "experience": "8 yrs · ex-Confluent", "applied": "Apr 18", "sample": "Reviewed"},
     {"id": "v_a02", "name": "A. Sharma", "specialization": "React · Frontend", "sessions": 0, "rating": 0, "quality": "Strong", "since": "—", "tier": "applicants", "experience": "6 yrs · ex-Razorpay", "applied": "Apr 17", "sample": "Pending"},
     {"id": "v_a03", "name": "P. Wong", "specialization": "Go · Distributed", "sessions": 0, "rating": 0, "quality": "Strong", "since": "—", "tier": "applicants", "experience": "10 yrs · ex-Google", "applied": "Apr 15", "sample": "Reviewed"},
@@ -240,7 +205,10 @@ ADMIN_VERIFIERS: list[dict] = [
 # ─── Candidates (adminWorkflow.ts → adminCandidatesSeed) ────────────────
 
 ADMIN_CANDIDATES: list[dict] = [
-    {"id": "c_001", "name": "Aarav Rao", "location": "Bengaluru", "verifications": 5, "topScore": 79, "lastSession": "Apr 26", "status": "active"},
+    # c_001 is Aarav Rao/usr_cand_001 — topScore corrected to match his real
+    # best skill_reports score (87, "SVR-NET-65433") now that a link exists
+    # to check it against; was a stale 79 before this fix.
+    {"id": "c_001", "name": "Aarav Rao", "location": "Bengaluru", "verifications": 5, "topScore": 87, "lastSession": "Apr 26", "status": "active", "linkedUserId": "usr_cand_001"},
     {"id": "c_002", "name": "Priya Nair", "location": "Pune", "verifications": 3, "topScore": 88, "lastSession": "Apr 20", "status": "active"},
     {"id": "c_003", "name": "Omar Haddad", "location": "Dubai", "verifications": 2, "topScore": 71, "lastSession": "Apr 26", "status": "active"},
     {"id": "c_004", "name": "Li Wei", "location": "Singapore", "verifications": 4, "topScore": 92, "lastSession": "Apr 18", "status": "active"},
@@ -251,7 +219,7 @@ ADMIN_CANDIDATES: list[dict] = [
 # ─── Companies (adminWorkflow.ts → adminCompaniesSeed) ──────────────────
 
 ADMIN_COMPANIES: list[dict] = [
-    {"id": "co_001", "name": "NorthStack", "plan": "Enterprise", "seats": 25, "seatsUsed": 12, "chats": 487, "followups": 3, "since": "Jan 2026", "status": "active"},
+    {"id": "co_001", "name": "NorthStack", "plan": "Enterprise", "seats": 25, "seatsUsed": 12, "chats": 487, "followups": 3, "since": "Jan 2026", "status": "active", "linkedCompanyId": "co_northstack"},
     {"id": "co_002", "name": "Razorpay", "plan": "Growth", "seats": 10, "seatsUsed": 7, "chats": 210, "followups": 4, "since": "Feb 2026", "status": "active"},
     {"id": "co_003", "name": "Meesho", "plan": "Growth", "seats": 10, "seatsUsed": 3, "chats": 88, "followups": 2, "since": "Mar 2026", "status": "active"},
     {"id": "co_004", "name": "TechCorp India", "plan": "Starter", "seats": 3, "seatsUsed": 1, "chats": 12, "followups": 1, "since": "Apr 2026", "status": "trial"},
@@ -268,39 +236,35 @@ INTEGRITY_FLAGS: list[dict] = [
     {"id": "flag_5", "summary": "Lookup behavior confirmed — candidate blacklisted", "refId": "SVR-8721", "severity": "confirmed", "date": "Apr 21", "action": "Resolved"},
 ]
 
-INTEGRITY_SIGNALS: dict = {
-    "key": "default",
-    "signals": [
-        {"id": "sig_1", "name": "Voice biometric baseline", "status": "Active · 186 verifiers enrolled"},
-        {"id": "sig_2", "name": "Response latency analysis", "status": "Active · flags > 2σ deviation"},
-        {"id": "sig_3", "name": "Screen-share gaze tracking", "status": "Active · per-session"},
-        {"id": "sig_4", "name": "Verifier score drift", "status": "Active · weekly audit"},
-        {"id": "sig_5", "name": "Transcript vs audio match", "status": "Active · NLP comparison"},
-        {"id": "sig_6", "name": "Candidate reuse detection", "status": "Active · voice + face"},
-    ],
-}
+INTEGRITY_SIGNALS: list[dict] = [
+    {"id": "sig_1", "name": "Voice biometric baseline", "status": "Active · 186 verifiers enrolled"},
+    {"id": "sig_2", "name": "Response latency analysis", "status": "Active · flags > 2σ deviation"},
+    {"id": "sig_3", "name": "Screen-share gaze tracking", "status": "Active · per-session"},
+    {"id": "sig_4", "name": "Verifier score drift", "status": "Active · weekly audit"},
+    {"id": "sig_5", "name": "Transcript vs audio match", "status": "Active · NLP comparison"},
+    {"id": "sig_6", "name": "Candidate reuse detection", "status": "Active · voice + face"},
+]
 
 # ─── Analytics (adminWorkflow.ts → analyticsData) ───────────────────────
 
-ANALYTICS: dict = {
-    "key": "default",
-    "topStats": [
-        {"label": "Sessions MoM growth", "value": "+11.7%", "color": "verdant"},
-        {"label": "Dossier → hire rate", "value": "34%", "sub": "industry: 8% traditional"},
-        {"label": "AI / verifier score Δ", "value": "±3.2", "sub": "avg score delta"},
-        {"label": "NPS", "value": "72", "sub": "candidate NPS · 81"},
-    ],
-    "months": ["Nov", "Dec", "Jan", "Feb", "Mar", "Apr"],
-    "sessions": [180, 224, 312, 348, 401, 448],
-    "topSkills": [
-        {"name": "System Design", "share": 38},
-        {"name": "Kafka & Streaming", "share": 27},
-        {"name": "Microservices", "share": 18},
-        {"name": ".NET / C#", "share": 12},
-        {"name": "Postgres Internals", "share": 9},
-        {"name": "Payments Domain", "share": 7},
-    ],
-}
+ANALYTICS_TOP_STATS: list[dict] = [
+    {"label": "Sessions MoM growth", "value": "+11.7%", "color": "verdant", "sub": None},
+    {"label": "Dossier → hire rate", "value": "34%", "color": None, "sub": "industry: 8% traditional"},
+    {"label": "AI / verifier score Δ", "value": "±3.2", "color": None, "sub": "avg score delta"},
+    {"label": "NPS", "value": "72", "color": None, "sub": "candidate NPS · 81"},
+]
+
+ANALYTICS_MONTHS = ["Nov", "Dec", "Jan", "Feb", "Mar", "Apr"]
+ANALYTICS_SESSIONS = [180, 224, 312, 348, 401, 448]
+
+ANALYTICS_TOP_SKILLS: list[dict] = [
+    {"name": "System Design", "share": 38},
+    {"name": "Kafka & Streaming", "share": 27},
+    {"name": "Microservices", "share": 18},
+    {"name": ".NET / C#", "share": 12},
+    {"name": "Postgres Internals", "share": 9},
+    {"name": "Payments Domain", "share": 7},
+]
 
 # ─── Feature registry + state (featureFlags.ts) ─────────────────────────
 
@@ -374,16 +338,6 @@ FEATURE_REGISTRY: list[dict] = [
         ],
     },
 ]
-
-
-def default_flag_state(registry: list[dict] | None = None) -> dict[str, bool]:
-    """Mirror of featureFlags.ts `defaultFlagState()`."""
-    result: dict[str, bool] = {}
-    for group in registry if registry is not None else FEATURE_REGISTRY:
-        for flag in group["flags"]:
-            result[flag["id"]] = flag["default"]
-    return result
-
 
 # ─── RBAC (rbac.ts) ─────────────────────────────────────────────────────
 
@@ -560,53 +514,212 @@ PILOT_STUDENTS: list[dict] = [
     {"id": "STU-006", "name": "Meena Rajan", "email": "meena@bits.ac.in", "program": "PLT-002", "completed": 1, "pending": 2, "avgScore": 69, "status": "active"},
 ]
 
+
+def default_flag_state(registry: list[dict] | None = None) -> dict[str, bool]:
+    """Mirror of featureFlags.ts `defaultFlagState()`."""
+    result: dict[str, bool] = {}
+    for group in registry if registry is not None else FEATURE_REGISTRY:
+        for flag in group["flags"]:
+            result[flag["id"]] = flag["default"]
+    return result
+
+
 # ─── Seeder ─────────────────────────────────────────────────────────────
 
-_SINGLETONS: list[tuple[str, dict]] = [
-    ("admin_dashboard", DASHBOARD),
-    ("admin_overview", OVERVIEW),
-    ("integrity_signals", INTEGRITY_SIGNALS),
-    ("admin_analytics", ANALYTICS),
-    ("admin_flag_registry", {"key": "default", "registry": FEATURE_REGISTRY}),
-    ("admin_flag_state", {"key": "default", "state": default_flag_state()}),
-]
 
-# (collection, id field, templates)
-_COLLECTIONS: list[tuple[str, str, list[dict]]] = [
-    ("admin_users", "id", ADMIN_USERS),
-    ("bots_simple", "id", SIMPLE_BOTS),
-    ("admin_feature_flags", "key", SIMPLE_FEATURE_FLAGS),
-    ("admin_role_permissions", "role", ROLE_PERMISSIONS_SIMPLE),
-    ("admin_dossiers", "id", DOSSIERS),
-    ("admin_slots", "id", ADMIN_SLOTS),
-    ("admin_verifiers", "id", ADMIN_VERIFIERS),
-    ("admin_candidates", "id", ADMIN_CANDIDATES),
-    ("admin_companies", "id", ADMIN_COMPANIES),
-    ("integrity_flags", "id", INTEGRITY_FLAGS),
-    ("rbac_roles", "id", RBAC_ROLES),
-    ("rbac_custom_roles", "id", CUSTOM_ROLES),
-    ("rbac_audit", "id", AUDIT_LOG),
-    ("pilot_programs", "id", PILOT_PROGRAMS),
-    ("pilot_students", "id", PILOT_STUDENTS),
-]
+async def seed_simple_bots(db: AsyncSession) -> int:
+    """Insert any missing SIMPLE_BOTS rows into the merged Postgres `bots`
+    table (see app.models.bot)."""
+    repo = BotRepository(db)
+    inserted = 0
+    for template in SIMPLE_BOTS:
+        existing = await repo.find_by_id(template["id"])
+        if existing:
+            continue
+        db.add(
+            BotModel(
+                id=template["id"],
+                name=template["name"],
+                description=template["description"],
+                bot_type=template["type"],
+                model_label=template["model"],
+                status=template["status"],
+                sessions_run=template["sessionsRun"],
+                avg_rating=template["avgRating"],
+                created_at=datetime.fromisoformat(template["createdAt"].replace("Z", "+00:00")),
+            )
+        )
+        inserted += 1
+    if inserted:
+        await db.flush()
+    return inserted
 
 
-async def seed_admin_ops() -> int:
-    """Insert any missing admin-ops seed docs. Returns how many were inserted."""
-    db = get_database()
+async def seed_admin_ops(db: AsyncSession) -> int:
+    """Insert any missing admin-ops seed rows (Postgres). Returns how many
+    top-level rows were inserted (child rows of a freshly-inserted parent
+    aren't counted separately, same convention as the rest of `seed_*`)."""
     inserted = 0
 
-    for coll_name, template in _SINGLETONS:
-        coll = db[coll_name]
-        if not await coll.find_one({"key": "default"}):
-            await coll.insert_one(dict(template))
+    if await db.get(AdminConsoleSnapshot, "singleton") is None:
+        snapshot = AdminConsoleSnapshot(id="singleton", **{
+            "total_users": DASHBOARD["totalUsers"],
+            "active_candidates": DASHBOARD["activeCandidates"],
+            "active_verifiers": DASHBOARD["activeVerifiers"],
+            "active_companies": DASHBOARD["activeCompanies"],
+            "sessions_today": DASHBOARD["sessionsToday"],
+            "reports_this_week": DASHBOARD["reportsThisWeek"],
+            "months": list(ANALYTICS_MONTHS),
+            "sessions": list(ANALYTICS_SESSIONS),
+        })
+        snapshot.stats = [
+            {"label": s["label"], "value": s["value"], "sub": s["sub"], "color": s["color"]}
+            for s in OVERVIEW_STATS
+        ]
+        snapshot.activity = [
+            {"id": a["id"], "text": a["text"], "time": a["time"], "tone": a["tone"]}
+            for a in OVERVIEW_ACTIVITY
+        ]
+        snapshot.top_stats = [
+            {"label": s["label"], "value": s["value"], "color": s["color"], "sub": s["sub"]}
+            for s in ANALYTICS_TOP_STATS
+        ]
+        snapshot.top_skills = [{"name": s["name"], "share": s["share"]} for s in ANALYTICS_TOP_SKILLS]
+        snapshot.items = [
+            {"id": s["id"], "name": s["name"], "status": s["status"]} for s in INTEGRITY_SIGNALS
+        ]
+        db.add(snapshot)
+        inserted += 1
+
+    for f in SIMPLE_FEATURE_FLAGS:
+        if await db.get(AdminFeatureFlag, f["key"]) is None:
+            db.add(AdminFeatureFlag(
+                key=f["key"], name=f["name"], description=f["description"],
+                enabled=f["enabled"], scope=f["scope"],
+            ))
             inserted += 1
 
-    for coll_name, id_field, templates in _COLLECTIONS:
-        coll = db[coll_name]
-        for item in templates:
-            if not await coll.find_one({id_field: item[id_field]}):
-                await coll.insert_one(dict(item))
-                inserted += 1
+    for rp in ROLE_PERMISSIONS_SIMPLE:
+        if await db.get(AdminRolePermission, rp["role"]) is None:
+            db.add(AdminRolePermission(role=rp["role"], permissions=list(rp["permissions"])))
+            inserted += 1
 
+    from app.models.candidate import SkillReportDetail
+
+    for d in DOSSIERS:
+        if await db.get(AdminDossier, d["id"]) is None:
+            # Linked only when a matching full report exists (draft/
+            # in-review dossiers never have one yet — see model docstring).
+            has_detail = await db.get(SkillReportDetail, d["id"]) is not None
+            db.add(AdminDossier(
+                id=d["id"], report_id=d["id"] if has_detail else None,
+                candidate=d["candidate"], skill=d["skill"], verifier=d["verifier"],
+                date=d["date"], score=d["score"], status=d["status"],
+            ))
+            inserted += 1
+
+    for s in ADMIN_SLOTS:
+        if await db.get(AdminSlot, s["id"]) is None:
+            db.add(AdminSlot(
+                id=s["id"], verifier=s["verifier"], day=s["day"], time=s["time"],
+                duration=s["duration"], skill=s["skill"], booked=s["booked"], candidate=s["candidate"],
+            ))
+            inserted += 1
+
+    for v in ADMIN_VERIFIERS:
+        if await db.get(AdminVerifier, v["id"]) is None:
+            db.add(AdminVerifier(
+                id=v["id"], linked_user_id=v.get("linkedUserId"), name=v["name"],
+                specialization=v["specialization"], sessions=v["sessions"],
+                rating=v["rating"], quality=v["quality"], since=v["since"], tier=v["tier"],
+                experience=v["experience"], applied=v["applied"], sample=v["sample"],
+            ))
+            inserted += 1
+
+    for c in ADMIN_CANDIDATES:
+        if await db.get(AdminCandidate, c["id"]) is None:
+            db.add(AdminCandidate(
+                id=c["id"], linked_user_id=c.get("linkedUserId"), name=c["name"], location=c["location"],
+                verifications=c["verifications"],
+                top_score=c["topScore"], last_session=c["lastSession"], status=c["status"],
+            ))
+            inserted += 1
+
+    for co in ADMIN_COMPANIES:
+        if await db.get(AdminCompany, co["id"]) is None:
+            db.add(AdminCompany(
+                id=co["id"], linked_company_id=co.get("linkedCompanyId"), name=co["name"], plan=co["plan"],
+                seats=co["seats"],
+                seats_used=co["seatsUsed"], chats=co["chats"], followups=co["followups"],
+                since=co["since"], status=co["status"],
+            ))
+            inserted += 1
+
+    for f in INTEGRITY_FLAGS:
+        if await db.get(IntegrityFlag, f["id"]) is None:
+            db.add(IntegrityFlag(
+                id=f["id"], summary=f["summary"], ref_id=f["refId"], severity=f["severity"],
+                date=f["date"], action=f["action"],
+            ))
+            inserted += 1
+
+    for i, r in enumerate(RBAC_ROLES):
+        if await db.get(RbacRole, r["id"]) is None:
+            role = RbacRole(id=r["id"], order_seq=i, label=r["label"], color=r["color"])
+            role.perms = [
+                {"perm_id": p["id"], "label": p["label"], "on": p["on"], "locked": p["locked"]}
+                for p in r["perms"]
+            ]
+            db.add(role)
+            inserted += 1
+
+    for cr in CUSTOM_ROLES:
+        if await db.get(RbacCustomRole, cr["id"]) is None:
+            db.add(RbacCustomRole(
+                id=cr["id"], name=cr["name"], base_role=cr["baseRole"], description=cr["desc"],
+                members=cr["members"], overrides=dict(cr["overrides"]),
+            ))
+            inserted += 1
+
+    for a in AUDIT_LOG:
+        if await db.get(RbacAuditEntry, a["id"]) is None:
+            db.add(RbacAuditEntry(id=a["id"], time=a["time"], actor=a["actor"], action=a["action"], detail=a["detail"]))
+            inserted += 1
+
+    for p in PILOT_PROGRAMS:
+        if await db.get(PilotProgram, p["id"]) is None:
+            db.add(PilotProgram(
+                id=p["id"], name=p["name"], college=p["college"], dept=p["dept"], batch=p["batch"],
+                coordinator=p["coordinator"], status=p["status"], students=p["students"],
+                completed=p["completed"], avg_score=p["avgScore"], start_date=p["startDate"],
+                end_date=p["endDate"], assessments=list(p["assessments"]),
+            ))
+            inserted += 1
+
+    for s in PILOT_STUDENTS:
+        if await db.get(PilotStudent, s["id"]) is None:
+            db.add(PilotStudent(
+                id=s["id"], name=s["name"], email=s["email"], program=s["program"],
+                completed=s["completed"], pending=s["pending"], avg_score=s["avgScore"], status=s["status"],
+            ))
+            inserted += 1
+
+    # Feature flag registry + state — seeded together since state defaults
+    # come straight from the registry (mirrors featureFlags.ts).
+    if await db.get(FlagGroup, 1) is None:
+        default_state = default_flag_state()
+        for group in FEATURE_REGISTRY:
+            row = FlagGroup(name=group["group"])
+            row.defs = [
+                FlagDef(id=f["id"], label=f["label"], description=f["desc"], default=f["default"])
+                for f in group["flags"]
+            ]
+            db.add(row)
+        await db.flush()  # so FlagDef rows exist for the FlagState FK below
+        for flag_id, enabled in default_state.items():
+            db.add(FlagState(flag_id=flag_id, enabled=enabled))
+        inserted += 1
+
+    if inserted:
+        await db.flush()
     return inserted

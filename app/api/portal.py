@@ -5,11 +5,13 @@ handlers/interviews.ts. All endpoints require authentication; privacy is
 scoped to the caller.
 """
 
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.deps import Principal, get_current_principal
+from app.db.session import get_session
 from app.schemas.booking import (
     BookingCatalog,
     Dossier,
@@ -27,16 +29,23 @@ router = APIRouter(
 )
 
 
-def _privacy() -> PrivacyService:
-    return PrivacyService()
+def _privacy(db: AsyncSession = Depends(get_session)) -> PrivacyService:
+    return PrivacyService(db)
 
 
-def _dossier() -> DossierService:
-    return DossierService()
+def _dossier(db: AsyncSession = Depends(get_session)) -> DossierService:
+    return DossierService(db)
 
 
-def _booking() -> BookingService:
-    return BookingService()
+def _owner_id(principal: Principal) -> Optional[str]:
+    """The caller's `users.id` when they have a row (bookings FK to it);
+    None for an unseeded dev principal, which may not book and has no
+    bookings."""
+    return principal.user_doc["id"] if principal.user_doc else None
+
+
+def _booking(db: AsyncSession = Depends(get_session)) -> BookingService:
+    return BookingService(db)
 
 
 # ─── Privacy ─────────────────────────────────────────────────────────────
@@ -89,9 +98,10 @@ async def dossier_by_id(
 @router.post("/dossier/{dossier_id}/share")
 async def share_dossier(
     dossier_id: str,
+    principal: Principal = Depends(get_current_principal),
     service: DossierService = Depends(_dossier),
 ) -> dict[str, Any]:
-    return await service.share(dossier_id)
+    return await service.share(dossier_id, _owner_id(principal))
 
 
 # ─── Interviews / booking ────────────────────────────────────────────────
@@ -112,9 +122,10 @@ async def interviews_catalog_by_id(
 @router.post("/interviews/schedule", response_model=ScheduleResponse)
 async def schedule_interview(
     payload: ScheduleRequest,
+    principal: Principal = Depends(get_current_principal),
     service: BookingService = Depends(_booking),
 ) -> ScheduleResponse:
-    return await service.schedule(payload)
+    return await service.schedule(payload, _owner_id(principal))
 
 
 @router.get("/interviews/session/{session_id}", response_model=LiveSessionSnapshot)
@@ -126,5 +137,8 @@ async def live_session(
 
 
 @router.get("/interviews/my-interviews", response_model=list[MyInterview])
-async def my_interviews(service: BookingService = Depends(_booking)) -> list[MyInterview]:
-    return await service.my_interviews()
+async def my_interviews(
+    principal: Principal = Depends(get_current_principal),
+    service: BookingService = Depends(_booking),
+) -> list[MyInterview]:
+    return await service.my_interviews(_owner_id(principal))

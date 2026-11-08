@@ -2,7 +2,7 @@
 
 Ported from ``backend/lib/agent_service/startup.py``. Differences:
 
-- Model configs come from the ``ai_models`` collection via
+- Model configs come from the ``ai_models`` table via
   :mod:`app.agents.model_config_adapter` (legacy: ``services.model_config_service``).
 - Credentials come from :mod:`app.agents.credentials` (legacy:
   ``services.model_credential_service``).
@@ -72,7 +72,7 @@ async def initialize_agent_service() -> Optional["AutogenAgentService"]:
     config = AgentServiceConfig()
 
     try:
-        # 1. Load model configurations (from the new `ai_models` collection)
+        # 1. Load model configurations (from the `ai_models` table)
         logger.info("Loading model configurations...")
         model_configs_dict = await model_config_adapter.get_all_model_configs_dict()
 

@@ -1,18 +1,18 @@
-import base64
-import json
 
 import pytest
 from httpx import AsyncClient
 
-
-def _hdr(sub: str, role: str) -> dict[str, str]:
-    raw = json.dumps({"sub": sub, "role": role, "iat": 1700000000000})
-    return {"Authorization": "Bearer dev_" + base64.b64encode(raw.encode()).decode()}
-
+from tests.helpers import hdr as _hdr
 
 AARAV = ("usr_cand_001", "candidate")
 MAYA = ("usr_ver_001", "interviewer")
 SURESH = ("usr_spec_001", "interviewer")
+
+
+@pytest.mark.asyncio
+async def test_requires_auth(client: AsyncClient):
+    r = await client.get("/api/candidate/skill-reports")
+    assert r.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -108,6 +108,34 @@ async def test_notifications_mark_read(client: AsyncClient):
 
 
 @pytest.mark.asyncio
+async def test_per_user_scoping_blocks_cross_user_access(client: AsyncClient):
+    """Regression test for the migration's per-user scoping fix: these
+    endpoints used to return every row in the table to every caller
+    (leftover single-demo-user behavior). Maya must not see Aarav's
+    skill reports, insights, session history, notifications, or report
+    detail — only her own (empty, since no data is seeded for her)."""
+    for path in (
+        "/api/candidate/skill-reports",
+        "/api/candidate/insights",
+        "/api/candidate/session-history",
+        "/api/notifications",
+    ):
+        r = await client.get(path, headers=_hdr(*MAYA))
+        assert r.status_code == 200, path
+        assert r.json() == [], f"{path} leaked another user's rows to Maya"
+
+    # Aarav's own report detail, fetched as Maya, must 404 — not just be
+    # absent from a list, but actually inaccessible by direct id too.
+    r = await client.get("/api/candidate/skill-reports/SVR-KAF-88421", headers=_hdr(*MAYA))
+    assert r.status_code == 404
+
+    # Sanity check the other direction: Aarav still sees his own data
+    # (the fix filters by owner, it doesn't just block everyone).
+    r = await client.get("/api/candidate/skill-reports", headers=_hdr(*AARAV))
+    assert len(r.json()) == 5
+
+
+@pytest.mark.asyncio
 async def test_profiles_me_derived_from_ledger(client: AsyncClient):
     r = await client.get("/api/profiles/me", headers=_hdr(*AARAV))
     assert r.status_code == 200
@@ -120,3 +148,37 @@ async def test_profiles_me_derived_from_ledger(client: AsyncClient):
         "/api/profiles/me", json={"bio": "New bio"}, headers=_hdr(*AARAV)
     )
     assert r.json() == {"ok": True, "patched": {"bio": "New bio"}}
+
+    # The edit must round-trip: a subsequent GET reflects the saved bio.
+    r = await client.get("/api/profiles/me", headers=_hdr(*AARAV))
+    assert r.json()["bio"] == "New bio"
+
+
+@pytest.mark.asyncio
+async def test_profiles_me_patch_persists_all_fields(client: AsyncClient):
+    patch = {
+        "bio": "Distributed systems, sagas, and coffee.",
+        "location": "Pune",
+        "current_role": "Staff Backend Engineer",
+        "experience_years": 8,
+        "skills": ["Kubernetes", "Event Sourcing"],
+    }
+    r = await client.patch("/api/profiles/me", json=patch, headers=_hdr(*AARAV))
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "patched": patch}
+
+    r = await client.get("/api/profiles/me", headers=_hdr(*AARAV))
+    assert r.status_code == 200
+    body = r.json()
+    assert body["bio"] == patch["bio"]
+    assert body["location"] == patch["location"]
+    assert body["current_role"] == patch["current_role"]
+    assert body["experience_years"] == patch["experience_years"]
+    assert body["skills"] == patch["skills"]
+
+    # The profile-skills override must NOT clobber the verified ledger
+    # rows that /api/skills and scoring are derived from.
+    r = await client.get("/api/skills", headers=_hdr(*AARAV))
+    assert r.status_code == 200
+    names = [s["name"] for s in r.json()]
+    assert ".NET Microservices" in names

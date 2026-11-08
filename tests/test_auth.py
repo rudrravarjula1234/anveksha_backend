@@ -72,17 +72,21 @@ async def test_refresh_rejects_garbage(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_frontend_minted_token_accepted_on_admin_routes(client: AsyncClient):
+async def test_frontend_minted_token_accepted_on_admin_routes(pg_client: AsyncClient):
     """The frontend mock's makeDevToken({sub, role, iat}) shape must
     authenticate against real admin endpoints — this is the exact token
-    in circulation when MSW passthrough flips an endpoint to us."""
+    in circulation when MSW passthrough flips an endpoint to us.
+
+    Uses `pg_client` (not `client`) because /api/admin/models is now
+    Postgres-backed — see the migration plan's Stage 2.
+    """
     import base64
     import json
 
     token = "dev_" + base64.b64encode(
         json.dumps({"sub": "usr_adm_001", "role": "admin", "iat": 1700000000000}).encode()
     ).decode()
-    r = await client.get("/api/admin/models", headers={"Authorization": f"Bearer {token}"})
+    r = await pg_client.get("/api/admin/models", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200
 
 

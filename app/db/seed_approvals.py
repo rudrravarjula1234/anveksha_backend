@@ -1,6 +1,8 @@
 """Approvals seed data — mirror of anveksha_ui/src/mocks/data/approvals.ts."""
 
-from app.db.mongo import get_database
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.timefmt import parse_wire, parse_wire_opt
 
 APPROVALS: list[dict] = [
     {
@@ -121,26 +123,77 @@ ACTIVE: list[dict] = [
 ]
 
 
-async def seed_approvals() -> int:
-    db = get_database()
+async def seed_approvals(db: AsyncSession) -> int:
+    from app.models.approvals import (
+        ActiveInterviewer,
+        InterviewerApproval,
+        SpecialistInvite,
+    )
+
     inserted = 0
 
-    approvals = db["interviewer_approvals"]
     for item in APPROVALS:
-        if not await approvals.find_one({"id": item["id"]}):
-            await approvals.insert_one(dict(item))
-            inserted += 1
+        if await db.get(InterviewerApproval, item["id"]):
+            continue
+        db.add(
+            InterviewerApproval(
+                id=item["id"],
+                candidate_id=item["candidateId"],
+                candidate_name=item["candidateName"],
+                candidate_initials=item["candidateInitials"],
+                dossier_id=item["dossierId"],
+                requested_skill=item["requestedSkill"],
+                origin=item["origin"],
+                submitted_at=parse_wire(item["submittedAt"]),
+                status=item["status"],
+                candidate_score=item.get("candidateScore"),
+                candidate_sessions=item.get("candidateSessions"),
+                bot_reasoning=item.get("botReasoning"),
+                reviewed_by=item.get("reviewedBy"),
+                reviewed_at=parse_wire_opt(item.get("reviewedAt")),
+            )
+        )
+        inserted += 1
 
-    invites = db["specialist_invites"]
     for item in INVITES:
-        if not await invites.find_one({"id": item["id"]}):
-            await invites.insert_one(dict(item))
-            inserted += 1
+        if await db.get(SpecialistInvite, item["id"]):
+            continue
+        invite = SpecialistInvite(
+            id=item["id"],
+            email=item["email"],
+            first_name=item["firstName"],
+            last_name=item["lastName"],
+            skill_name=item["skillName"],
+            bio=item.get("bio", ""),
+            status=item["status"],
+            invited_at=parse_wire(item["invitedAt"]),
+            invited_by=item["invitedBy"],
+            accepted_at=parse_wire_opt(item.get("acceptedAt")),
+        )
+        invite.external_proofs = [
+            {"proof_id": p["id"], "label": p["label"], "url": p["url"]}
+            for p in item.get("externalProof", [])
+        ]
+        db.add(invite)
+        inserted += 1
 
-    active = db["active_interviewers"]
     for item in ACTIVE:
-        if not await active.find_one({"candidateId": item["candidateId"]}):
-            await active.insert_one(dict(item))
-            inserted += 1
+        if await db.get(ActiveInterviewer, item["candidateId"]):
+            continue
+        active = ActiveInterviewer(
+            candidate_id=item["candidateId"],
+            candidate_name=item["candidateName"],
+            candidate_initials=item["candidateInitials"],
+            mode=item["mode"],
+            sessions=item.get("sessions", 0),
+            rating=item.get("rating"),
+            reliability=item.get("reliability"),
+            joined_at=parse_wire(item["joinedAt"]),
+        )
+        active.authorities = [{"skill_name": name} for name in item.get("authorities", [])]
+        db.add(active)
+        inserted += 1
 
+    if inserted:
+        await db.flush()
     return inserted

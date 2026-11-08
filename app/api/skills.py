@@ -7,16 +7,18 @@ Contract mirror of `anveksha_ui/src/mocks/handlers/skills.ts`:
 """
 
 from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.deps import Principal, get_current_principal
+from app.db.session import get_session
 from app.schemas.skill import SkillLedger, SkillLedgerRow
 from app.services.skill_service import SkillService
 
 router = APIRouter(tags=["Skills"])
 
 
-def _service() -> SkillService:
-    return SkillService()
+def _service(db: AsyncSession = Depends(get_session)) -> SkillService:
+    return SkillService(db)
 
 
 @router.get("/ledger", response_model=SkillLedger)

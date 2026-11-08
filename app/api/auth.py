@@ -13,9 +13,11 @@ they don't advertise their existence).
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.deps import Principal, get_current_principal
 from app.core.config import get_settings
+from app.db.session import get_session
 from app.schemas.user import (
     AuthResponse,
     DevLoginRequest,
@@ -28,8 +30,8 @@ from app.services.auth_service import AuthService
 router = APIRouter(tags=["Auth"])
 
 
-def _service() -> AuthService:
-    return AuthService()
+def _service(db: AsyncSession = Depends(get_session)) -> AuthService:
+    return AuthService(db)
 
 
 def _debug_only() -> None:

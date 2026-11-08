@@ -16,12 +16,15 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 import httpx
+from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
 from app.auth.dev_tokens import decode_dev_token, make_dev_token
 from app.core.config import get_settings
 from app.core.exceptions import ForbiddenError, NotFoundError, UnauthorizedError
-from app.db.mongo import get_database
+from app.core.timefmt import to_wire, to_wire_opt
+from app.models.user import User as UserModel
+from app.repositories.user_repo import UserRepository
 from app.schemas.user import AuthResponse, User, UserRole
 
 log = logging.getLogger(__name__)
@@ -29,8 +32,25 @@ log = logging.getLogger(__name__)
 _GOOGLE_TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo"
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _to_schema(row: UserModel) -> User:
+    return User(
+        id=row.id,
+        email=row.email,
+        first_name=row.first_name,
+        last_name=row.last_name,
+        user_name=row.user_name,
+        roles=[r.role for r in row.roles],  # already ordered — see UserRole.position
+        phone=row.phone,
+        is_active=row.is_active,
+        created_at=to_wire(row.created_at),
+        updated_at=to_wire(row.updated_at),
+        last_login=to_wire_opt(row.last_login),
+        picture=row.picture,
+    )
 
 
 async def verify_google_id_token(id_token: str, audience: str) -> dict[str, Any]:
@@ -65,15 +85,12 @@ async def verify_google_id_token(id_token: str, audience: str) -> dict[str, Any]
 
 
 class AuthService:
-    def _users(self):
-        return get_database()["users"]
+    def __init__(self, db: AsyncSession) -> None:
+        self.repo = UserRepository(db)
 
     # ── Lookups ─────────────────────────────────────────────────────────
 
-    async def _user_by_id(self, user_id: str) -> Optional[dict]:
-        return await self._users().find_one({"id": user_id})
-
-    async def _default_user_for_role(self, role: UserRole) -> Optional[dict]:
+    async def _default_user_for_role(self, role: UserRole) -> Optional[UserModel]:
         """The persona the dev-login button for `role` should land on.
 
         Deterministic: results are sorted by stable seed `id` (usr_cand_001,
@@ -81,54 +98,50 @@ class AuthService:
         (usr_spec_001) is excluded from role-based resolution — she is only
         reachable via an explicit userId, same as the frontend.
         """
-        cursor = self._users().find({"roles": role})
-        candidates = await cursor.to_list(length=50)
-        non_specialist = [u for u in candidates if u.get("id") != "usr_spec_001"]
+        candidates = await self.repo.list_by_role(role)
+        non_specialist = [u for u in candidates if u.id != "usr_spec_001"]
         pool = non_specialist or candidates
         if not pool:
             return None
         # Prefer the persona whose PRIMARY (first) role matches, e.g. for
         # role='interviewer' prefer Maya over a candidate-first overlap.
-        exact = [u for u in pool if u.get("roles", [None])[-1] == role or u.get("roles", [None])[0] == role]
-        chosen = sorted(exact or pool, key=lambda u: u.get("id", ""))
+        exact = [u for u in pool if self._role_at(u, -1) == role or self._role_at(u, 0) == role]
+        chosen = sorted(exact or pool, key=lambda u: u.id)
         return chosen[0]
+
+    @staticmethod
+    def _role_at(user: UserModel, index: int) -> Optional[str]:
+        roles = [r.role for r in user.roles]
+        return roles[index] if roles else None
 
     # ── Token issuance ──────────────────────────────────────────────────
 
-    def _issue(self, user_doc: dict, role: UserRole) -> AuthResponse:
-        access = make_dev_token(user_doc["id"], role)
+    def _issue(self, user_row: UserModel, role: UserRole) -> AuthResponse:
+        access = make_dev_token(user_row.id, role)
         return AuthResponse(
-            user=User.model_validate({k: v for k, v in user_doc.items() if k != "_id"}),
+            user=_to_schema(user_row),
             access_token=access,
             refresh_token=access + ".refresh",
             token_type="bearer",
-        )
-
-    async def _touch_last_login(self, user_id: str) -> None:
-        await self._users().find_one_and_update(
-            {"id": user_id},
-            {"$set": {"last_login": _now_iso(), "updated_at": _now_iso()}},
         )
 
     # ── Flows ───────────────────────────────────────────────────────────
 
     async def dev_login(self, role: UserRole, user_id: Optional[str] = None) -> AuthResponse:
         if user_id:
-            doc = await self._user_by_id(user_id)
-            if doc is None:
+            row = await self.repo.find_by_id(user_id)
+            if row is None:
                 raise NotFoundError(f"User {user_id} not found")
         else:
-            doc = await self._default_user_for_role(role)
-            if doc is None:
+            row = await self._default_user_for_role(role)
+            if row is None:
                 raise NotFoundError(f"No seeded user with role {role}")
 
-        if not doc.get("is_active", True):
+        if not row.is_active:
             raise ForbiddenError("Account deactivated")
 
-        await self._touch_last_login(doc["id"])
-        # Re-read so the response reflects the bumped last_login.
-        doc = await self._user_by_id(doc["id"]) or doc
-        return self._issue(doc, role)
+        row = await self.repo.touch_last_login(row.id, _now()) or row
+        return self._issue(row, role)
 
     async def google_register(self, google_token: str, role: UserRole) -> AuthResponse:
         """Sign in (or register) with a Google ID token.
@@ -151,41 +164,35 @@ class AuthService:
         claims = await verify_google_id_token(google_token, settings.GOOGLE_CLIENT_ID)
         email = claims["email"].lower()
 
-        doc = await self._users().find_one({"email": email})
-        if doc is None:
-            doc = await self._register_from_google(email, claims)
-        elif not doc.get("is_active", True):
+        row = await self.repo.find_by_email(email)
+        if row is None:
+            row = await self._register_from_google(email, claims)
+        elif not row.is_active:
             raise ForbiddenError("Account deactivated")
 
         # The user's primary role wins over the request hint — a seeded
         # admin email must land on the admin portal.
-        effective_role: UserRole = (doc.get("roles") or [role])[0]
-        await self._touch_last_login(doc["id"])
-        doc = await self._user_by_id(doc["id"]) or doc
+        roles = [r.role for r in row.roles]
+        effective_role: UserRole = roles[0] if roles else role
+        row = await self.repo.touch_last_login(row.id, _now()) or row
         log.info("Google sign-in: %s as %s", email, effective_role)
-        return self._issue(doc, effective_role)
+        return self._issue(row, effective_role)
 
-    async def _register_from_google(self, email: str, claims: dict[str, Any]) -> dict:
+    async def _register_from_google(self, email: str, claims: dict[str, Any]) -> UserModel:
         """First-time Google login — create the user from token claims."""
         first = claims.get("given_name") or email.split("@")[0]
         last = claims.get("family_name") or ""
-        doc = {
-            "id": f"usr_g_{ULID()}",
-            "email": email,
-            "first_name": first,
-            "last_name": last,
-            "user_name": email.split("@")[0],
+        return await self.repo.insert_with_roles(
+            id=f"usr_g_{ULID()}",
+            email=email,
+            first_name=first,
+            last_name=last,
+            user_name=email.split("@")[0],
             # Self-registration is always candidate — privileged roles are
             # granted by an admin (or the seed list), never self-asserted.
-            "roles": ["candidate"],
-            "is_active": True,
-            "created_at": _now_iso(),
-            "updated_at": _now_iso(),
-            "last_login": None,
-        }
-        await self._users().insert_one(doc)
-        log.info("Registered new Google user %s (%s)", email, doc["id"])
-        return doc
+            roles=["candidate"],
+            is_active=True,
+        )
 
     async def refresh(self, refresh_token: str) -> AuthResponse:
         if not refresh_token.endswith(".refresh"):
@@ -193,18 +200,19 @@ class AuthService:
         payload = decode_dev_token(refresh_token)
         if not payload or "sub" not in payload:
             raise UnauthorizedError("invalid refresh token")
-        doc = await self._user_by_id(payload["sub"])
-        if doc is None:
+        row = await self.repo.find_by_id(payload["sub"])
+        if row is None:
             raise UnauthorizedError("unknown user")
-        role = payload.get("role") or (doc.get("roles") or ["candidate"])[0]
-        return self._issue(doc, role)  # type: ignore[arg-type]
+        roles = [r.role for r in row.roles]
+        role = payload.get("role") or (roles[0] if roles else "candidate")
+        return self._issue(row, role)  # type: ignore[arg-type]
 
     async def me(self, user_id: Optional[str], email: Optional[str]) -> User:
-        doc = None
+        row = None
         if user_id:
-            doc = await self._user_by_id(user_id)
-        if doc is None and email:
-            doc = await self._users().find_one({"email": email})
-        if doc is None:
+            row = await self.repo.find_by_id(user_id)
+        if row is None and email:
+            row = await self.repo.find_by_email(email)
+        if row is None:
             raise UnauthorizedError("unauthorized")
-        return User.model_validate({k: v for k, v in doc.items() if k != "_id"})
+        return _to_schema(row)

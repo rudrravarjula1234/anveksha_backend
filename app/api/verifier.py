@@ -8,8 +8,10 @@ interviewer (or admin) role.
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.deps import require_roles
+from app.db.session import get_session
 from app.schemas.verifier import (
     GovernanceData,
     NextSessionBrief,
@@ -30,8 +32,8 @@ router = APIRouter(
 )
 
 
-def _service() -> VerifierService:
-    return VerifierService()
+def _service(db: AsyncSession = Depends(get_session)) -> VerifierService:
+    return VerifierService(db)
 
 
 @router.get("/queue", response_model=VerifierQueue)

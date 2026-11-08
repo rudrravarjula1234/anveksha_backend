@@ -1,14 +1,8 @@
-import base64
-import json
 
 import pytest
 from httpx import AsyncClient
 
-
-def _hdr(sub: str, role: str) -> dict[str, str]:
-    raw = json.dumps({"sub": sub, "role": role, "iat": 1700000000000})
-    return {"Authorization": "Bearer dev_" + base64.b64encode(raw.encode()).decode()}
-
+from tests.helpers import hdr as _hdr
 
 ADMIN = ("usr_adm_001", "admin")
 CANDIDATE = ("usr_cand_001", "candidate")

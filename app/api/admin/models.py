@@ -13,8 +13,10 @@ Every route requires the admin role. Mounting prefix lives in
 """
 
 from fastapi import APIRouter, Depends, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.deps import require_roles
+from app.db.session import get_session
 from app.schemas.ai_model import AdminModel, AdminModelCreate, AdminModelUpdate
 from app.services.ai_model_service import AIModelService
 
@@ -24,9 +26,8 @@ router = APIRouter(
 )
 
 
-def _service() -> AIModelService:
-    """Trivial DI seam — overridden in tests."""
-    return AIModelService()
+def _service(db: AsyncSession = Depends(get_session)) -> AIModelService:
+    return AIModelService(db)
 
 
 @router.get("", response_model=list[AdminModel])

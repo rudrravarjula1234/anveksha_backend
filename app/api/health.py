@@ -1,25 +1,27 @@
 """Public liveness probe."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import __version__
-from app.db.mongo import get_database
+from app.db.session import get_session
 
 router = APIRouter(tags=["Health"])
 
 
 @router.get("/health")
-async def health() -> dict[str, object]:
-    """Confirms the process is up *and* Mongo is reachable."""
+async def health(db: AsyncSession = Depends(get_session)) -> dict[str, object]:
+    """Confirms the process is up *and* Postgres is reachable."""
     try:
-        await get_database().command("ping")
-        mongo_ok = True
+        await db.execute(text("SELECT 1"))
+        database_ok = True
     except Exception:  # noqa: BLE001 — surfaces as degraded health, not a crash
-        mongo_ok = False
+        database_ok = False
 
     return {
-        "status": "ok" if mongo_ok else "degraded",
+        "status": "ok" if database_ok else "degraded",
         "service": "anveksha-backend",
         "version": __version__,
-        "mongo": "up" if mongo_ok else "down",
+        "database": "up" if database_ok else "down",
     }

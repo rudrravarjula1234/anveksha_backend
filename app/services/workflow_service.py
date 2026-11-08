@@ -11,7 +11,9 @@ code, but the *service* may use uuid since it runs outside the sandbox).
 
 import logging
 import uuid
-from typing import Any
+from typing import Any, Optional
+
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.temporal.client import get_temporal_client
@@ -20,7 +22,7 @@ log = logging.getLogger(__name__)
 
 
 async def start_agent_workflow(
-    agent_id: str, context: dict[str, Any], user_id: str = ""
+    agent_id: str, context: dict[str, Any], user_id: str = "", db: Optional[AsyncSession] = None
 ) -> dict[str, Any]:
     """Kick off a durable AgentTaskWorkflow. Returns the workflow id."""
     client = await get_temporal_client()
@@ -40,7 +42,7 @@ async def start_agent_workflow(
     # Temporal's own visibility store isn't queried by the API.
     from app.services.workflow_runs_service import record_started
 
-    await record_started(handle.id, agent_id, user_id)
+    await record_started(handle.id, agent_id, user_id, db=db)
     log.info("Started workflow %s (agent=%s)", handle.id, agent_id)
     return {"workflowId": handle.id, "status": "started"}
 

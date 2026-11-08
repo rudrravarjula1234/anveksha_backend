@@ -13,15 +13,17 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.deps import Principal, get_current_principal, require_roles
+from app.db.session import get_session
 from app.schemas.company import (
     AnonymousInterviewer,
     AnonymousInterviewerCreate,
     BillingResponse,
+    ChatRequest,
     CompanyCredits,
     CompanyProfile,
-    ChatRequest,
     CreditMutation,
     CreditRate,
     CreditRatePatch,
@@ -47,8 +49,8 @@ admin_router = APIRouter(
 )
 
 
-def _service() -> CompanyService:
-    return CompanyService()
+def _service(db: AsyncSession = Depends(get_session)) -> CompanyService:
+    return CompanyService(db)
 
 
 # ─── Company + anonymous interviewers ────────────────────────────────────
@@ -116,7 +118,7 @@ async def set_credit_rate(
     principal: Principal = Depends(require_roles("admin")),
     service: CompanyService = Depends(_service),
 ) -> CreditRate:
-    return await service.set_credit_rate(body.rupeesPerCredit, principal.user_id or "usr_adm_001")
+    return await service.set_credit_rate(body.rupeesPerCredit, principal.actor_id)
 
 
 # ─── Team + billing ──────────────────────────────────────────────────────
@@ -204,7 +206,11 @@ async def request_followup(
 
 
 @router.post("/companies/chat")
-async def chat(body: ChatRequest, service: CompanyService = Depends(_service)) -> StreamingResponse:
+async def chat(
+    body: ChatRequest,
+    service: CompanyService = Depends(_service),
+    db: AsyncSession = Depends(get_session),
+) -> StreamingResponse:
     """Streamed plain-text answer with a typing cadence.
 
     Runs the `candidate_chat` registry agent when the framework +
@@ -214,10 +220,9 @@ async def chat(body: ChatRequest, service: CompanyService = Depends(_service)) -
     from app.core.privacy import candidate_alias  # noqa: PLC0415
     from app.services.agent_registry_service import AgentRegistryService  # noqa: PLC0415
 
-    unlocked = await service._unlocked_ids()  # noqa: SLF001 — same module family
-    locked = body.candidateId not in unlocked
+    locked = not (body.candidateId and await service.is_unlocked(body.candidateId))
 
-    registry = AgentRegistryService()
+    registry = AgentRegistryService(db)
     result = await registry.run_agent(
         "candidate_chat",
         {
@@ -232,9 +237,19 @@ async def chat(body: ChatRequest, service: CompanyService = Depends(_service)) -
         # Belt-and-braces: scrub the seeded candidate's name from canned text.
         answer = answer.replace("Aarav", candidate_alias(body.candidateId)).replace("’s’", "'s")
 
+    # Perf (H4): the typing cadence used to sleep 40 ms per 24-char chunk
+    # unconditionally — every answer paid ~40 ms × ceil(len/24) of pure
+    # artificial delay (chat's p50 was ~480 ms, almost all of it sleep).
+    # Keep the cadence feel but bound its TOTAL cost: chunks stream for at
+    # most ~120 ms, then the remainder arrives immediately. The reassembled
+    # response body is byte-identical either way.
     async def _gen():
+        spent = 0.0
         for i in range(0, len(answer), 24):
             yield answer[i : i + 24]
-            await asyncio.sleep(0.04)
+            if spent < 0.12:
+                step = min(0.04, 0.12 - spent)
+                await asyncio.sleep(step)
+                spent += step
 
     return StreamingResponse(_gen(), media_type="text/plain; charset=utf-8")

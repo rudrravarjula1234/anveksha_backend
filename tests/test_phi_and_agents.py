@@ -1,16 +1,11 @@
 """PHI gating + agent registry tests."""
 
-import base64
-import json
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
-
-def _hdr(sub: str, role: str) -> dict[str, str]:
-    raw = json.dumps({"sub": sub, "role": role, "iat": 1700000000000})
-    return {"Authorization": "Bearer dev_" + base64.b64encode(raw.encode()).decode()}
-
+from tests.helpers import hdr as _hdr
 
 COMPANY = ("usr_co_001", "company")
 CANDIDATE = ("usr_cand_001", "candidate")
@@ -204,3 +199,26 @@ async def test_chat_uses_alias_for_locked_candidate(client: AsyncClient):
     assert r.status_code == 200
     assert "Aarav" not in r.text
     assert "Candidate A" in r.text
+
+
+@pytest.mark.asyncio
+async def test_locked_alias_is_stable_across_filters(client: AsyncClient, pg_session: AsyncSession):
+    """An unmapped candidate's alias depends on its id only, not on where
+    it lands in a filtered list."""
+    from app.models.company import SearchCandidate
+
+    pg_session.add(SearchCandidate(
+        id="cand_zz_alias", name="Hidden Person", initials="HP", title="Eng", years=3, location="Pune",
+        verification_score=95, match_percent=50, verified_skills=["Kafka"], gray_skills=[], last_activity="1d",
+    ))
+    await pg_session.flush()
+
+    aliases = set()
+    for min_score in (0, 90):
+        r = await client.post(
+            "/api/ai-search", json={"query": "x", "filters": {"minScore": min_score}}, headers=_hdr(*COMPANY)
+        )
+        row = next(c for c in r.json()["candidates"] if c["id"] == "cand_zz_alias")
+        assert row["name"] != "Hidden Person"
+        aliases.add(row["name"])
+    assert len(aliases) == 1

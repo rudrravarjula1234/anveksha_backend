@@ -1,7 +1,7 @@
 """Agent registry + execution seam.
 
 `AgentRegistryService` manages the six pre-defined agent configs
-(model binding + system message, admin-editable, Mongo-stored).
+(model binding + system message, admin-editable, Postgres-stored).
 
 `run_agent()` is the single execution entrypoint every feature calls
 (brief generation, report drafting, gap/gray analysis, search, chat).
@@ -21,15 +21,26 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Optional
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.exceptions import NotFoundError, ValidationError
-from app.db.mongo import get_database
+from app.core.timefmt import to_wire
+from app.models.agent_registry import AgentConfig as AgentConfigModel
+from app.models.ai_model import AIModel
+from app.repositories.agent_registry_repo import AgentRegistryRepository
+from app.repositories.ai_model_repo import AIModelRepository
 from app.schemas.agent_registry import AgentConfig, AgentConfigPatch, AgentRunResult
 
 log = logging.getLogger(__name__)
 
 # Fallback generators registered by feature modules:
-#   key = agent id, value = async fn(context: dict) -> str
-FallbackFn = Callable[[dict[str, Any]], Awaitable[str]]
+#   key = agent id, value = async fn(context: dict, db: AsyncSession) -> str
+# `db` is this service's own session — fallbacks needing Postgres reads
+# must use it, not a new connection, or they won't see uncommitted work
+# (matters most in tests, where a request runs inside one rolled-back
+# transaction).
+FallbackFn = Callable[[dict[str, Any], AsyncSession], Awaitable[str]]
 _FALLBACKS: dict[str, FallbackFn] = {}
 
 
@@ -37,43 +48,60 @@ def register_fallback(agent_id: str, fn: FallbackFn) -> None:
     _FALLBACKS[agent_id] = fn
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
-def _strip(doc: dict[str, Any]) -> dict[str, Any]:
-    doc.pop("_id", None)
-    return doc
+def _to_schema(row: AgentConfigModel) -> AgentConfig:
+    return AgentConfig(
+        id=row.id,
+        name=row.name,
+        description=row.description,
+        usedBy=list(row.used_by or []),
+        modelId=row.model_id,
+        systemMessage=row.system_message,
+        defaultSystemMessage=row.default_system_message,
+        temperature=row.temperature,
+        enabled=row.enabled,
+        updatedAt=to_wire(row.updated_at),
+        updatedBy=row.updated_by,
+    )
 
 
 class AgentRegistryService:
-    def _coll(self):
-        return get_database()["agent_registry"]
+    def __init__(self, db: AsyncSession) -> None:
+        self.db = db
+        self.repo = AgentRegistryRepository(db)
+        self.models_repo = AIModelRepository(db)
 
     async def list_agents(self) -> list[AgentConfig]:
-        docs = await self._coll().find().to_list(length=50)
-        return [AgentConfig.model_validate(_strip(d)) for d in docs]
+        rows = await self.repo.list_all()
+        return [_to_schema(r) for r in rows]
 
     async def get(self, agent_id: str) -> AgentConfig:
-        doc = await self._coll().find_one({"id": agent_id})
-        if doc is None:
+        row = await self.repo.find_by_id(agent_id)
+        if row is None:
             raise NotFoundError(f"Agent {agent_id} not found")
-        return AgentConfig.model_validate(_strip(doc))
+        return _to_schema(row)
 
     async def patch(self, agent_id: str, patch: AgentConfigPatch, updated_by: str) -> AgentConfig:
         diff = patch.model_dump(exclude_unset=True)
         if "modelId" in diff and diff["modelId"] is not None:
-            model = await get_database()["ai_models"].find_one({"id": diff["modelId"]})
+            model = await self.models_repo.find_by_id(diff["modelId"])
             if model is None:
                 raise ValidationError(f"modelId {diff['modelId']} does not match any AI model")
-        diff["updatedAt"] = _now_iso()
-        diff["updatedBy"] = updated_by
-        updated = await self._coll().find_one_and_update(
-            {"id": agent_id}, {"$set": diff}, return_document=True
-        )
-        if updated is None:
+        field_map = {
+            "modelId": "model_id",
+            "systemMessage": "system_message",
+            "temperature": "temperature",
+            "enabled": "enabled",
+        }
+        kwargs = {field_map[k]: v for k, v in diff.items() if k in field_map}
+        kwargs["updated_by"] = updated_by
+        row = await self.repo.update_by_id(agent_id, **kwargs)
+        if row is None:
             raise NotFoundError(f"Agent {agent_id} not found")
-        return AgentConfig.model_validate(_strip(updated))
+        return _to_schema(row)
 
     async def reset_system_message(self, agent_id: str, updated_by: str) -> AgentConfig:
         current = await self.get(agent_id)
@@ -85,16 +113,15 @@ class AgentRegistryService:
 
     # ── Execution ───────────────────────────────────────────────────────
 
-    async def _resolve_model(self, config: AgentConfig) -> Optional[dict[str, Any]]:
+    async def _resolve_model(self, config: AgentConfig) -> Optional[AIModel]:
         """The bound model, or the first active model when unbound."""
-        models = get_database()["ai_models"]
         if config.modelId:
-            doc = await models.find_one({"id": config.modelId})
-            if doc and doc.get("status") == "active":
-                return _strip(doc)
-        cursor = models.find({"status": "active"})
-        docs = await cursor.to_list(length=10)
-        return _strip(docs[0]) if docs else None
+            model = await self.models_repo.find_by_id(config.modelId)
+            if model is not None and model.status == "active":
+                return model
+        stmt = select(AIModel).where(AIModel.status == "active").order_by(AIModel.id).limit(1)
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
 
     async def run_agent(self, agent_id: str, context: dict[str, Any]) -> AgentRunResult:
         config = await self.get(agent_id)
@@ -112,15 +139,15 @@ class AgentRegistryService:
                         agentId=agent_id,
                         output=output,
                         source="agent",
-                        modelId=model.get("id"),
+                        modelId=model.id,
                     )
             except Exception:  # noqa: BLE001 — degrade, never break the feature
                 log.exception("Agent %s real-run failed; falling back.", agent_id)
 
-        return await self._fallback(agent_id, context, model_id=model.get("id") if model else None)
+        return await self._fallback(agent_id, context, model_id=model.id if model else None)
 
     async def _run_real(
-        self, config: AgentConfig, model: dict[str, Any], context: dict[str, Any]
+        self, config: AgentConfig, model: AIModel, context: dict[str, Any]
     ) -> Optional[str]:
         """Run via the ported agentic framework. Returns None when the
         framework or credentials aren't available (caller falls back)."""
@@ -130,9 +157,10 @@ class AgentRegistryService:
             return None
         return await run_single_agent(
             system_message=config.systemMessage,
-            model_doc=model,
+            model=model,
             temperature=config.temperature,
             context=context,
+            db=self.db,
         )
 
     async def _fallback(
@@ -144,5 +172,5 @@ class AgentRegistryService:
                 f"Agent {agent_id} unavailable and no fallback registered",
                 status_code=503,
             )
-        output = await fn(context)
+        output = await fn(context, self.db)
         return AgentRunResult(agentId=agent_id, output=output, source="fallback", modelId=model_id)

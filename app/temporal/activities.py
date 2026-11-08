@@ -25,10 +25,15 @@ async def run_agent_activity(agent_id: str, context: dict[str, Any]) -> dict[str
     Imports the service lazily so this module imports cleanly in the
     Temporal workflow sandbox (which restricts top-level imports).
     """
+    from app.db.session import get_sessionmaker
     from app.services.agent_registry_service import AgentRegistryService
 
-    service = AgentRegistryService()
-    result = await service.run_agent(agent_id, context)
+    # No FastAPI request cycle here (a Temporal worker activity) — open
+    # our own session rather than relying on Depends(get_session). Reads
+    # only (run_agent never writes), so no explicit commit needed.
+    async with get_sessionmaker()() as db:
+        service = AgentRegistryService(db)
+        result = await service.run_agent(agent_id, context)
     return result.model_dump()
 
 

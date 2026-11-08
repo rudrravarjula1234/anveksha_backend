@@ -1,16 +1,21 @@
+"""Admin AI-model config endpoints — ported to Postgres (Stage 2 template
+entity). Runs against the real local Postgres via the `pg_client` fixture
+(transactional, rolled back per test).
+"""
+
 import pytest
 from httpx import AsyncClient
 
 
 @pytest.mark.asyncio
-async def test_requires_admin_role(client: AsyncClient):
+async def test_requires_admin_role(pg_client: AsyncClient):
     """No bearer → 401."""
-    r = await client.get("/api/admin/models")
+    r = await pg_client.get("/api/admin/models")
     assert r.status_code == 401
 
 
 @pytest.mark.asyncio
-async def test_non_admin_forbidden(client: AsyncClient):
+async def test_non_admin_forbidden(pg_client: AsyncClient):
     """A candidate dev-token must not see admin endpoints."""
     import base64
     import json
@@ -18,22 +23,22 @@ async def test_non_admin_forbidden(client: AsyncClient):
     token = "dev_" + base64.b64encode(
         json.dumps({"email": "c@x.dev", "role": "candidate"}).encode()
     ).decode()
-    r = await client.get(
+    r = await pg_client.get(
         "/api/admin/models", headers={"Authorization": f"Bearer {token}"}
     )
     assert r.status_code == 403
 
 
 @pytest.mark.asyncio
-async def test_empty_list(client: AsyncClient, admin_headers: dict[str, str]):
-    r = await client.get("/api/admin/models", headers=admin_headers)
+async def test_empty_list(pg_client: AsyncClient, admin_headers: dict[str, str]):
+    r = await pg_client.get("/api/admin/models", headers=admin_headers)
     assert r.status_code == 200
     assert r.json() == []
 
 
 @pytest.mark.asyncio
 async def test_create_then_list_then_patch_then_toggle_then_delete(
-    client: AsyncClient, admin_headers: dict[str, str]
+    pg_client: AsyncClient, admin_headers: dict[str, str]
 ):
     # Create
     create_body = {
@@ -46,7 +51,7 @@ async def test_create_then_list_then_patch_then_toggle_then_delete(
         "costPer1kOut": 15.0,
         "notes": "Primary reasoning model",
     }
-    r = await client.post("/api/admin/models", json=create_body, headers=admin_headers)
+    r = await pg_client.post("/api/admin/models", json=create_body, headers=admin_headers)
     assert r.status_code == 201, r.text
     created = r.json()
     assert created["id"].startswith("mdl_")
@@ -55,12 +60,12 @@ async def test_create_then_list_then_patch_then_toggle_then_delete(
     new_id = created["id"]
 
     # List
-    r = await client.get("/api/admin/models", headers=admin_headers)
+    r = await pg_client.get("/api/admin/models", headers=admin_headers)
     assert r.status_code == 200
     assert any(m["id"] == new_id for m in r.json())
 
     # Patch (rename + bump context window)
-    r = await client.patch(
+    r = await pg_client.patch(
         f"/api/admin/models/{new_id}",
         json={"name": "Claude Sonnet 4.5 Updated", "contextWindow": 250_000},
         headers=admin_headers,
@@ -71,19 +76,19 @@ async def test_create_then_list_then_patch_then_toggle_then_delete(
     assert body["contextWindow"] == 250_000
 
     # Toggle off
-    r = await client.post(f"/api/admin/models/{new_id}/toggle", headers=admin_headers)
+    r = await pg_client.post(f"/api/admin/models/{new_id}/toggle", headers=admin_headers)
     assert r.status_code == 200
     assert r.json()["status"] == "inactive"
 
     # Toggle back on
-    r = await client.post(f"/api/admin/models/{new_id}/toggle", headers=admin_headers)
+    r = await pg_client.post(f"/api/admin/models/{new_id}/toggle", headers=admin_headers)
     assert r.status_code == 200
     assert r.json()["status"] == "active"
 
     # Delete → 204, then 404 on subsequent fetch
-    r = await client.delete(f"/api/admin/models/{new_id}", headers=admin_headers)
+    r = await pg_client.delete(f"/api/admin/models/{new_id}", headers=admin_headers)
     assert r.status_code == 204
-    r = await client.patch(
+    r = await pg_client.patch(
         f"/api/admin/models/{new_id}", json={"name": "x"}, headers=admin_headers
     )
     assert r.status_code == 404
@@ -91,9 +96,9 @@ async def test_create_then_list_then_patch_then_toggle_then_delete(
 
 @pytest.mark.asyncio
 async def test_create_rejects_unknown_provider(
-    client: AsyncClient, admin_headers: dict[str, str]
+    pg_client: AsyncClient, admin_headers: dict[str, str]
 ):
-    r = await client.post(
+    r = await pg_client.post(
         "/api/admin/models",
         json={"name": "x", "provider": "FantasyAI", "model": "foo"},
         headers=admin_headers,
@@ -103,11 +108,26 @@ async def test_create_rejects_unknown_provider(
 
 @pytest.mark.asyncio
 async def test_patch_unknown_id_returns_404(
-    client: AsyncClient, admin_headers: dict[str, str]
+    pg_client: AsyncClient, admin_headers: dict[str, str]
 ):
-    r = await client.patch(
+    r = await pg_client.patch(
         "/api/admin/models/mdl_doesnotexist",
         json={"name": "x"},
         headers=admin_headers,
     )
     assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_fallback_id_enforced_as_real_fk(
+    pg_client: AsyncClient, admin_headers: dict[str, str]
+):
+    """New in the Postgres port: fallbackId is a real FK now (unenforced
+    in the old Mongo repo). Pointing it at a nonexistent model must fail
+    rather than silently storing a dangling reference."""
+    r = await pg_client.post(
+        "/api/admin/models",
+        json={"name": "x", "provider": "OpenAI", "model": "gpt", "fallbackId": "mdl_doesnotexist"},
+        headers=admin_headers,
+    )
+    assert r.status_code in (400, 409, 422)

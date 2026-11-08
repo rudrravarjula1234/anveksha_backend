@@ -1,12 +1,7 @@
-"""Bot schemas — mirror of the frontend's `BotFull` mock contract.
-
-Source: `anveksha_ui/src/mocks/data/botsFull.ts`. Same caveats as
-ai_model.py — camelCase preserved on the wire.
-
-Note: `primaryModelId` / `fallbackModelId` are *soft references* to the
-AdminModel collection. We don't enforce referential integrity at the
-database layer (Mongo) — the service layer is responsible for any
-validation we need to add later.
+"""Bot schemas — mirror of the frontend's `BotFull` mock contract
+(`anveksha_ui/src/mocks/data/botsFull.ts`), camelCase preserved on the
+wire. `primaryModelId` / `fallbackModelId` are FK-enforced references to
+`ai_models` at the database layer.
 """
 
 from typing import Literal, Optional

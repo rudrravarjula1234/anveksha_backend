@@ -1,6 +1,6 @@
 """Assessment + coupon seed data — mirror of assessmentsFull.ts + coupons.ts."""
 
-from app.db.mongo import get_database
+from sqlalchemy.ext.asyncio import AsyncSession
 
 SEED_ASSESSMENTS: list[dict] = [
     {
@@ -157,25 +157,55 @@ SEED_COUPONS: list[dict] = [
 ]
 
 
-async def seed_assessments() -> int:
-    db = get_database()
-    coll = db["assessments"]
+async def seed_assessments(db: AsyncSession) -> int:
+    from app.models.assessment import Assessment, AssessmentBot
+
     inserted = 0
     for template in SEED_ASSESSMENTS:
-        if await coll.find_one({"id": template["id"]}):
+        if await db.get(Assessment, template["id"]):
             continue
-        await coll.insert_one(dict(template))
+        row = Assessment(
+            id=template["id"],
+            slug=template["slug"],
+            title=template["title"],
+            domain=template["domain"],
+            depth=template["depth"],
+            type=template["type"],
+            duration=template["duration"],
+            price=template["price"],
+            available=template["available"],
+            popular=template["popular"],
+            published=template["published"],
+            description=template["description"],
+            tags=template["tags"],
+            probes=template["probes"],
+            sessions=template["sessions"],
+        )
+        row.bot_links = [AssessmentBot(bot_id=b) for b in template["botIds"]]
+        db.add(row)
         inserted += 1
+    if inserted:
+        await db.flush()
     return inserted
 
 
-async def seed_coupons() -> int:
-    db = get_database()
-    coll = db["coupons"]
+async def seed_coupons(db: AsyncSession) -> int:
+    from app.models.assessment import Coupon
+
     inserted = 0
     for template in SEED_COUPONS:
-        if await coll.find_one({"code": template["code"]}):
+        if await db.get(Coupon, template["code"]):
             continue
-        await coll.insert_one(dict(template))
+        db.add(
+            Coupon(
+                code=template["code"],
+                type=template["type"],
+                value=template["value"],
+                desc=template["desc"],
+                active=template["active"],
+            )
+        )
         inserted += 1
+    if inserted:
+        await db.flush()
     return inserted

@@ -1,28 +1,30 @@
-"""Deterministic fallbacks for every registry agent.
-
-These keep each agent-powered feature fully functional when the AutoGen
-extras aren't installed or no provider credential is configured. They
-are data-grounded (reading the same Mongo collections a real agent
-would receive as context), just not generative.
+"""Deterministic fallbacks for every registry agent — keep each
+agent-powered feature functional when AutoGen isn't installed or no
+provider credential is configured. Data-grounded (read the same tables a
+real agent would), just not generative.
 
 Imported for side effects from `app.main` — importing registers all six.
 """
 
 from typing import Any
 
-from app.db.mongo import get_database
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.services.agent_registry_service import register_fallback
 
 
-async def _brief_fallback(context: dict[str, Any]) -> str:
-    doc = await get_database()["verifier_brief"].find_one({"key": "default"}) or {}
-    probes = doc.get("prioritizedProbes", [])
-    gray = doc.get("grayRequested", [])
-    skill = context.get("skill") or doc.get("skill", "the scheduled skill")
+async def _brief_fallback(context: dict[str, Any], db: AsyncSession) -> str:
+    from app.models.verifier import VerifierConsoleState
+
+    # The verifier console state (merged singleton) is Postgres now.
+    row = await db.get(VerifierConsoleState, "default")
+    probes = list(row.prioritized_probes or []) if row else []
+    gray = list(row.gray_requested or []) if row else []
+    skill = context.get("skill") or (row.skill if row else "the scheduled skill")
     candidate = context.get("candidateRef", "the candidate")
     lines = [
         f"Pre-session brief · {skill} · {candidate}",
-        doc.get("summary", "Focus the session on previously identified gap areas."),
+        (row.summary if row and row.summary else "Focus the session on previously identified gap areas."),
         "",
         "Prioritized probes:",
         *[f"  {i + 1}. {p}" for i, p in enumerate(probes)],
@@ -32,46 +34,62 @@ async def _brief_fallback(context: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-async def _report_fallback(context: dict[str, Any]) -> str:
+async def _report_fallback(context: dict[str, Any], db: AsyncSession) -> str:
+    from app.models.verifier import SessionReport
+
+    # session_reports is Postgres now (see the migration plan).
     report_id = context.get("reportId", "rpt_001")
-    doc = await get_database()["session_reports"].find_one({"id": report_id}) or {}
-    sections = doc.get("sections", [])
-    avg = round(sum(s.get("aiScore", 0) for s in sections) / len(sections)) if sections else 0
+    row = await db.get(SessionReport, report_id)
+    sections = row.sections if row else []
+    avg = round(sum(s["ai_score"] for s in sections) / len(sections)) if sections else 0
+    strengths = ", ".join(row.strengths or []) if row else ""
+    gray_areas = ", ".join(row.gray_areas or []) if row else ""
     return (
-        f"Draft report for session {doc.get('sessionId', context.get('sessionId', '?'))}: "
+        f"Draft report for session {row.session_id if row else context.get('sessionId', '?')}: "
         f"overall {avg}/100 across {len(sections)} dimensions. "
-        f"Strengths: {', '.join(doc.get('strengths', [])) or '—'}. "
-        f"Gray areas: {', '.join(doc.get('grayAreas', [])) or '—'}. "
+        f"Strengths: {strengths or '—'}. "
+        f"Gray areas: {gray_areas or '—'}. "
         "Review and adjust the per-dimension scores before publishing."
     )
 
 
-async def _gap_fallback(context: dict[str, Any]) -> str:
-    doc = await get_database()["verifier_suggested_gaps"].find_one({"key": "default"}) or {}
-    gaps = doc.get("gaps", [])
+async def _gap_fallback(context: dict[str, Any], db: AsyncSession) -> str:  # noqa: ARG001
+    from sqlalchemy import select
+
+    from app.models.verifier import SuggestedGap
+
+    # verifier_suggested_gaps is Postgres now (see the migration plan).
+    stmt = select(SuggestedGap).order_by(SuggestedGap.id)
+    gaps = (await db.execute(stmt)).scalars().all()
     lines = ["Gap analysis (evidence-bound):"]
     for g in gaps:
-        lines.append(f"  × {g.get('text')} — {g.get('sub')}")
+        lines.append(f"  × {g.text} — {g.sub}")
     return "\n".join(lines)
 
 
-async def _gray_fallback(context: dict[str, Any]) -> str:
+async def _gray_fallback(context: dict[str, Any], db: AsyncSession) -> str:
+    from app.models.candidate import PublicProfile
+
     candidate_id = context.get("candidateId", "usr_cand_001")
-    profile = await get_database()["public_profiles"].find_one({"userId": candidate_id}) or {}
-    grays = profile.get("grayAreas", [])
+    # public_profiles is Postgres now (see the migration plan). Uses the
+    # session passed in by AgentRegistryService — the same
+    # request/test-scoped session, not a separate connection (which
+    # wouldn't see this request's not-yet-committed work under tests).
+    profile = await db.get(PublicProfile, candidate_id)
+    grays = list(profile.gray_areas) if profile else []
     if not grays:
         return "No gray areas on record — every claimed skill has been tested."
-    ranked = sorted(grays, key=lambda g: -g.get("companies", 0))
+    ranked = sorted(grays, key=lambda g: -g["companies"])
     lines = ["Gray analysis — never-tested areas ranked by company demand:"]
     for g in ranked:
         lines.append(
-            f"  ? {g.get('name')} — {g.get('companies', 0)} companies asked. "
+            f"  ? {g['name']} — {g['companies']} companies asked. "
             "A targeted 30-min assessment resolves this."
         )
     return "\n".join(lines)
 
 
-async def _search_fallback(context: dict[str, Any]) -> str:
+async def _search_fallback(context: dict[str, Any], db: AsyncSession) -> str:  # noqa: ARG001
     query = context.get("query", "")
     return (
         f'Ranked matches for "{query}" using verified skills, scores and '
@@ -79,7 +97,7 @@ async def _search_fallback(context: dict[str, Any]) -> str:
     )
 
 
-async def _chat_fallback(context: dict[str, Any]) -> str:
+async def _chat_fallback(context: dict[str, Any], db: AsyncSession) -> str:  # noqa: ARG001
     prompt = str(context.get("question", "")).lower()
     ref = context.get("candidateRef", "the candidate")
     if "payment" in prompt or "idempotenc" in prompt:

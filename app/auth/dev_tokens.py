@@ -1,16 +1,7 @@
-"""Development-mode bearer tokens.
-
-The frontend issues two historical payload shapes inside
-`dev_<base64(json)>` tokens:
-
-1. `{"sub": "<userId>", "role": "<role>", "iat": <ms>}` — what the mock's
-   `makeDevToken` produces (anveksha_ui/src/mocks/data/users.ts). This is
-   the shape in circulation today.
-2. `{"email": "...", "role": "..."}` — the legacy backend's dev format.
-
-We accept both. Refresh tokens are the access token plus a literal
-`.refresh` suffix (mock convention), so decoding strips anything after
-the first `.`.
+"""Development-mode bearer tokens (`dev_<base64(json)>`). Accepts both
+`{"sub", "role", "iat"}` (the frontend mock's current shape) and
+`{"email", "role"}` payloads. Refresh tokens are the access token plus a
+literal `.refresh` suffix, stripped on decode.
 
 Dev tokens are ONLY honoured when `settings.DEBUG` is true.
 """

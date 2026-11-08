@@ -1,15 +1,10 @@
-"""Temporal workflow definitions.
+"""Temporal workflow definitions. A single generic `AgentTaskWorkflow`,
+parametrised by `agent_id`, runs any agent through
+`AgentRegistryService.run_agent` durably with retry, notifies the user
+over WebSocket on completion/failure, and exposes a `status` query.
 
-The legacy backend had three workflows (InterviewContext, ReportGeneration,
-AISearch) because each wrapped a different service. In the new backend
-every agent runs through one path — `AgentRegistryService.run_agent` — so a
-single generic `AgentTaskWorkflow` parametrised by `agent_id` replaces all
-three. It runs the agent activity durably with retry, then notifies the
-user over WebSocket on completion/failure, and exposes a `status` query.
-
-Only the worker imports + executes this (the worker requires the
-`temporalio` extra). The module still imports cleanly without the SDK
-thanks to the no-op shims in compat.py, so the rest of the app is fine.
+Only the worker imports + executes this (requires the `temporalio`
+extra); no-op shims in compat.py let the module import cleanly without it.
 """
 
 from typing import Any

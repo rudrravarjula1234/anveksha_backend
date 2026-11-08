@@ -10,7 +10,7 @@ Ported from ``backend/services/interview_feedback_service.py``. Differences:
   both entrypoints raise a clear 503-mapped error in that case.
 - The legacy code hardcoded ``model_name="gemini-2.0-flash"``. The port keeps
   that default but resolves against the models registered in the ``ai_models``
-  collection: when the preferred model is not registered, the first active
+  table: when the preferred model is not registered, the first active
   model in the cache is used instead (see ``_resolve_model_name``).
 """
 
@@ -38,13 +38,13 @@ logger = logging.getLogger(__name__)
 
 def _resolve_model_name(service, preferred: str = DEFAULT_FEEDBACK_MODEL) -> str:
     """Pick the model to use: the preferred one when registered, otherwise the
-    first active model loaded from the ``ai_models`` collection."""
+    first active model loaded from the ``ai_models`` table."""
     if service.config.model_cache.get(preferred):
         return preferred
     available = list(service.config.model_cache.configs.keys())
     if not available:
         raise ModelConfigNotFoundError(
-            "No active models registered in the ai_models collection. "
+            "No active models registered in the ai_models table. "
             "Create one via POST /api/admin/models before generating feedback."
         )
     fallback = available[0]

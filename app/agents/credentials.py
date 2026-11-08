@@ -1,21 +1,14 @@
-"""Provider credential storage with Fernet encryption.
+"""Provider credential storage with Fernet encryption — one row per
+provider in ``model_credentials`` (``app.models.credentials.ModelCredential``).
 
-Replacement for the legacy ``services/model_credential_service.py``. Stores
-one document per provider in the ``model_credentials`` collection:
+The Fernet key comes from ``settings.CREDENTIAL_ENCRYPTION_KEY``; when unset
+and ``DEBUG`` is true, a stable dev key is derived from ``JWT_SECRET`` (not
+suitable for production).
 
-    {
-        "provider": "google",              # lowercase provider key
-        "api_key_encrypted": "<fernet>",   # encrypted at rest, never returned
-        "endpoint": "https://...",         # optional custom endpoint
-        "additional_config": {...},
-        "is_active": true,
-        "created_at": ..., "updated_at": ...
-    }
-
-The Fernet key comes from ``settings.CREDENTIAL_ENCRYPTION_KEY``. When unset
-and ``DEBUG`` is true, a stable dev key is derived from ``JWT_SECRET`` so
-local environments work out of the box (NOT suitable for production — keys
-encrypted with the dev key are unreadable once a real key is configured).
+Each function takes an optional ``db: AsyncSession`` — pass the
+request-scoped session when called from a route; when omitted (agent
+runner, app-startup hook, neither with a request-scoped session), a
+short-lived session is opened and committed internally.
 """
 
 from __future__ import annotations
@@ -23,18 +16,18 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from cryptography.fernet import Fernet
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.exceptions import ConfigurationError
 from app.core.config import get_settings
-from app.db.mongo import get_database
+from app.db.session import get_sessionmaker
+from app.models.credentials import ModelCredential
 
 logger = logging.getLogger(__name__)
-
-COLLECTION = "model_credentials"
 
 
 # ── Encryption helpers ───────────────────────────────────────────────────
@@ -77,40 +70,46 @@ def _decrypt(encrypted: Any) -> str:
     return encryption.decrypt(data).decode()
 
 
-def _masked_row(doc: Dict[str, Any], api_key: Optional[str]) -> Dict[str, Any]:
+def _masked_row(row: ModelCredential, api_key: Optional[str]) -> Dict[str, Any]:
     return {
-        "provider": doc["provider"],
+        "provider": row.provider,
         "api_key_masked": mask_api_key(api_key) if api_key else "<undecryptable>",
-        "endpoint": doc.get("endpoint"),
-        "additional_config": doc.get("additional_config", {}),
-        "is_active": doc.get("is_active", True),
-        "created_at": doc.get("created_at"),
-        "updated_at": doc.get("updated_at"),
+        "endpoint": row.endpoint,
+        "additional_config": row.additional_config or {},
+        "is_active": row.is_active,
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
     }
 
 
 # ── CRUD ─────────────────────────────────────────────────────────────────
 
-async def get_credential(provider: str) -> Optional[Dict[str, Any]]:
-    """Get the decrypted credential for a provider (or None).
-
-    Returns ``{"provider", "api_key", "endpoint", "additional_config"}``.
-    """
-    db = get_database()
-    doc = await db[COLLECTION].find_one({"provider": provider.lower(), "is_active": True})
-    if not doc:
+async def _get_credential(db: AsyncSession, provider: str) -> Optional[Dict[str, Any]]:
+    row = await db.get(ModelCredential, provider.lower())
+    if row is None or not row.is_active:
         return None
     try:
-        api_key = _decrypt(doc["api_key_encrypted"])
+        api_key = _decrypt(row.api_key_encrypted)
     except Exception:  # noqa: BLE001 - mirror legacy leniency (InvalidToken et al.)
         logger.warning("Failed to decrypt credential for provider %s", provider)
         return None
     return {
-        "provider": doc["provider"],
+        "provider": row.provider,
         "api_key": api_key,
-        "endpoint": doc.get("endpoint"),
-        "additional_config": doc.get("additional_config", {}),
+        "endpoint": row.endpoint,
+        "additional_config": row.additional_config or {},
     }
+
+
+async def get_credential(provider: str, db: Optional[AsyncSession] = None) -> Optional[Dict[str, Any]]:
+    """Get the decrypted credential for a provider (or None).
+
+    Returns ``{"provider", "api_key", "endpoint", "additional_config"}``.
+    """
+    if db is not None:
+        return await _get_credential(db, provider)
+    async with get_sessionmaker()() as session:
+        return await _get_credential(session, provider)
 
 
 async def upsert_credential(
@@ -118,56 +117,78 @@ async def upsert_credential(
     api_key: str,
     endpoint: Optional[str] = None,
     extra: Optional[Dict[str, Any]] = None,
+    db: Optional[AsyncSession] = None,
 ) -> Dict[str, Any]:
     """Create or update the credential for a provider. Returns a masked row."""
-    db = get_database()
     encryption = get_encryption()
-    now = datetime.now(timezone.utc)
-
     encrypted = encryption.encrypt(api_key.encode()).decode()  # store as string
+    provider_key = provider.lower()
 
-    await db[COLLECTION].update_one(
-        {"provider": provider.lower()},
-        {
-            "$set": {
-                "api_key_encrypted": encrypted,
-                "endpoint": endpoint,
-                "additional_config": extra or {},
-                "is_active": True,
-                "updated_at": now,
-            },
-            "$setOnInsert": {"provider": provider.lower(), "created_at": now},
-        },
-        upsert=True,
-    )
-    doc = await db[COLLECTION].find_one({"provider": provider.lower()})
-    return _masked_row(doc, api_key)
+    async def _apply(session: AsyncSession) -> ModelCredential:
+        row = await session.get(ModelCredential, provider_key)
+        if row is None:
+            row = ModelCredential(provider=provider_key)
+            session.add(row)
+        row.api_key_encrypted = encrypted
+        row.endpoint = endpoint
+        row.additional_config = extra or {}
+        row.is_active = True
+        return row
+
+    if db is not None:
+        row = await _apply(db)
+        await db.flush()
+        await db.refresh(row)
+        return _masked_row(row, api_key)
+    async with get_sessionmaker()() as session:
+        row = await _apply(session)
+        await session.commit()
+        await session.refresh(row)
+        return _masked_row(row, api_key)
 
 
-async def list_credentials(active_only: bool = True) -> List[Dict[str, Any]]:
+async def list_credentials(active_only: bool = True, db: Optional[AsyncSession] = None) -> List[Dict[str, Any]]:
     """List stored credentials with masked keys (never returns plaintext)."""
-    db = get_database()
-    query: Dict[str, Any] = {"is_active": True} if active_only else {}
-    docs = await db[COLLECTION].find(query).sort("provider", 1).to_list(length=None)
 
-    rows: List[Dict[str, Any]] = []
-    for doc in docs:
-        try:
-            api_key: Optional[str] = _decrypt(doc["api_key_encrypted"])
-        except Exception:  # noqa: BLE001
-            api_key = None
-        rows.append(_masked_row(doc, api_key))
-    return rows
+    async def _list(session: AsyncSession) -> List[Dict[str, Any]]:
+        stmt = select(ModelCredential).order_by(ModelCredential.provider)
+        if active_only:
+            stmt = stmt.where(ModelCredential.is_active.is_(True))
+        rows = (await session.execute(stmt)).scalars().all()
+
+        result: List[Dict[str, Any]] = []
+        for row in rows:
+            try:
+                api_key: Optional[str] = _decrypt(row.api_key_encrypted)
+            except Exception:  # noqa: BLE001
+                api_key = None
+            result.append(_masked_row(row, api_key))
+        return result
+
+    if db is not None:
+        return await _list(db)
+    async with get_sessionmaker()() as session:
+        return await _list(session)
 
 
-async def delete_credential(provider: str) -> bool:
+async def delete_credential(provider: str, db: Optional[AsyncSession] = None) -> bool:
     """Delete a credential (soft delete, mirroring the legacy service)."""
-    db = get_database()
-    result = await db[COLLECTION].update_one(
-        {"provider": provider.lower()},
-        {"$set": {"is_active": False, "updated_at": datetime.now(timezone.utc)}},
-    )
-    return result.modified_count > 0
+
+    async def _delete(session: AsyncSession) -> bool:
+        row = await session.get(ModelCredential, provider.lower())
+        if row is None:
+            return False
+        row.is_active = False
+        return True
+
+    if db is not None:
+        deleted = await _delete(db)
+        await db.flush()
+        return deleted
+    async with get_sessionmaker()() as session:
+        deleted = await _delete(session)
+        await session.commit()
+        return deleted
 
 
 async def get_all_credentials_dict() -> Dict[str, Dict[str, Any]]:
@@ -178,24 +199,32 @@ async def get_all_credentials_dict() -> Dict[str, Dict[str, Any]]:
     Port of the legacy ``get_all_credentials_dict`` — credentials that fail
     to decrypt are skipped silently.
     """
-    db = get_database()
-    docs = await db[COLLECTION].find({"is_active": True}).to_list(length=None)
+    async with get_sessionmaker()() as db:
+        stmt = select(ModelCredential).where(ModelCredential.is_active.is_(True))
+        rows = (await db.execute(stmt)).scalars().all()
 
-    result: Dict[str, Dict[str, Any]] = {}
-    for doc in docs:
-        try:
-            api_key = _decrypt(doc["api_key_encrypted"])
-        except Exception:  # noqa: BLE001 - skip credentials that fail to decrypt
-            continue
-        result[doc["provider"]] = {
-            "api_key": api_key,
-            "endpoint": doc.get("endpoint"),
-            "additional_config": doc.get("additional_config", {}),
-        }
-    return result
+        result: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            try:
+                api_key = _decrypt(row.api_key_encrypted)
+            except Exception:  # noqa: BLE001 - skip credentials that fail to decrypt
+                continue
+            result[row.provider] = {
+                "api_key": api_key,
+                "endpoint": row.endpoint,
+                "additional_config": row.additional_config or {},
+            }
+        return result
 
 
-async def configured_providers() -> List[str]:
+async def configured_providers(db: Optional[AsyncSession] = None) -> List[str]:
     """Provider keys that currently have an active credential (no decryption)."""
-    db = get_database()
-    return sorted(await db[COLLECTION].distinct("provider", {"is_active": True}))
+    stmt = (
+        select(ModelCredential.provider)
+        .where(ModelCredential.is_active.is_(True))
+        .order_by(ModelCredential.provider)
+    )
+    if db is not None:
+        return list((await db.execute(stmt)).scalars().all())
+    async with get_sessionmaker()() as session:
+        return list((await session.execute(stmt)).scalars().all())

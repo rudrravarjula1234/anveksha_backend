@@ -1,4 +1,5 @@
-# Production-flavoured stack: API + MongoDB.
+# Production-flavoured stack: API + Supabase Postgres (hosted, over the
+# network — no local Postgres container for the app itself).
 #
 # Variables come from `.env` in the same directory — copy `.env.example`
 # to `.env` and edit before `docker compose up`. The API container builds
@@ -6,28 +7,6 @@
 # override in `docker-compose.dev.yml`.
 
 services:
-  mongo:
-    image: mongo:7
-    container_name: anveksha-mongo
-    restart: unless-stopped
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USERNAME}
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
-      MONGO_INITDB_DATABASE: ${MONGO_DATABASE}
-    ports:
-      # Exposed locally so you can connect with Compass / mongosh. Drop
-      # this in production deployments — internal-network only.
-      - "27017:27017"
-    volumes:
-      - mongo_data:/data/db
-      - mongo_config:/data/configdb
-    healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-
   api:
     build:
       context: .
@@ -37,23 +16,41 @@ services:
     env_file:
       - .env
     environment:
-      # Override the Compose-internal Mongo address. The API's config
-      # builds the full URI from username/password/host/port — we just
-      # have to point host + port at the Compose service.
-      MONGO_HOST: mongo
-      MONGO_PORT: 27017
+      # DATABASE_URL (pooled, Supavisor transaction mode) and
+      # DATABASE_MIGRATION_URL (direct) come from .env — required, no
+      # local-container default (see .env.example).
       TEMPORAL_HOST: temporal:7233
     ports:
       - "${PORT:-8000}:8000"
-    depends_on:
-      mongo:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
       interval: 15s
       timeout: 5s
       retries: 5
       start_period: 15s
+
+  # ── Postgres (test suite only) ───────────────────────────────────────────
+  # The app itself talks to hosted Supabase Postgres over the network (see
+  # DATABASE_URL/DATABASE_MIGRATION_URL in .env) — this container exists
+  # solely so `pytest` has a real local Postgres to run against (tests use
+  # real Postgres types — ARRAY/JSONB/TIMESTAMPTZ — that SQLite can't
+  # faithfully emulate). Not used by the `api`/`temporal-worker` services.
+  postgres-test:
+    image: postgres:16-alpine
+    container_name: anveksha-postgres-test
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: anveksha_test
+      POSTGRES_PASSWORD: anveksha_test
+      POSTGRES_DB: anveksha_test
+    ports:
+      - "55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U anveksha_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    profiles: ["test"]
 
   # ── Temporal (durable agent workflows) ──────────────────────────────────────
   temporal-db:
@@ -89,8 +86,8 @@ services:
         condition: service_healthy
 
   # Durable worker — runs the AgentTaskWorkflow + activities. Same image as
-  # the API, different entrypoint. Needs Mongo (activities read agent config)
-  # and Temporal.
+  # the API, different entrypoint. Needs Postgres (activities read agent
+  # config) and Temporal.
   temporal-worker:
     build:
       context: .
@@ -101,16 +98,10 @@ services:
     env_file:
       - .env
     environment:
-      MONGO_HOST: mongo
-      MONGO_PORT: 27017
       TEMPORAL_HOST: temporal:7233
     depends_on:
-      mongo:
-        condition: service_healthy
       temporal:
         condition: service_started
 
 volumes:
-  mongo_data:
-  mongo_config:
   temporal_db:

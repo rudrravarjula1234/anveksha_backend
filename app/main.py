@@ -36,10 +36,10 @@ from app.api.admin import ops as admin_ops
 from app.core.config import get_settings
 from app.core.exceptions import AppError
 from app.core.logging import setup_logging
-from app.db.indexes import ensure_indexes
-from app.db.mongo import close_mongo, connect_to_mongo
-from app.db.seed import run_seeds
+from app.db.seed import run_seeds, seeds_present
+from app.db.session import close_db, connect_to_db, get_sessionmaker
 from app.middleware.access_log import AccessLogMiddleware
+from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.request_id import RequestIDMiddleware
 
 log = logging.getLogger(__name__)
@@ -61,9 +61,18 @@ async def lifespan(_app: FastAPI):
             "NOT functional yet (issued dev tokens are rejected when DEBUG=false). "
             "Run with DEBUG=true until the production JWT path is implemented."
         )
-    await connect_to_mongo()
-    await ensure_indexes()
-    await run_seeds()
+    # Postgres (Supabase). Schema itself is managed by Alembic
+    # (`alembic upgrade head`), not created here.
+    await connect_to_db()
+    async with get_sessionmaker()() as seed_session:
+        # H1: fast-path restarts — when a previous boot already committed
+        # the full seed set, skip replaying ~13 seeders (~260 queries /
+        # ~1 s on every warm restart).
+        if await seeds_present(seed_session):
+            log.info("Seed data present — skipping run_seeds (fast-path).")
+        else:
+            await run_seeds(seed_session)
+            await seed_session.commit()
     try:
         yield
     finally:
@@ -72,7 +81,7 @@ async def lifespan(_app: FastAPI):
         from app.temporal.client import close_temporal_client
 
         await close_temporal_client()
-        await close_mongo()
+        await close_db()
 
 
 def create_app() -> FastAPI:
@@ -89,6 +98,7 @@ def create_app() -> FastAPI:
     # ── Middleware (innermost → outermost order) ─────────────────────────
     app.add_middleware(AccessLogMiddleware)
     app.add_middleware(RequestIDMiddleware)
+    app.add_middleware(RateLimitMiddleware, requests_per_minute=300, burst=100)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins_list,

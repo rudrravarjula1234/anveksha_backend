@@ -1,7 +1,15 @@
 """Company-portal seed data — mirror of companyInterviewers.ts,
 companyOps.ts, followups.ts and company.ts."""
 
-from app.db.mongo import get_database
+from datetime import datetime
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.timefmt import parse_wire
+
+
+def _parse_iso(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 COMPANY: dict = {"id": "co_northstack", "name": "NorthStack Inc.", "primaryDomain": "northstack.co"}
 
@@ -81,62 +89,146 @@ FOLLOWUP_SKILLS: list[dict] = [
 ]
 
 
-async def seed_company() -> int:
-    db = get_database()
+async def seed_company(db: AsyncSession) -> int:
+    from app.models.company import (
+        AnonymousInterviewer,
+        Billing,
+        Company,
+        CreditRate,
+        CreditTransaction,
+        FollowupSkillOption,
+        GrayFollowup,
+        PipelineCard,
+        SearchCandidate,
+        SearchFacets,
+        TeamMember,
+    )
+
     inserted = 0
 
-    if not await db["companies"].find_one({"id": COMPANY["id"]}):
-        await db["companies"].insert_one(dict(COMPANY))
+    if not await db.get(Company, COMPANY["id"]):
+        db.add(
+            Company(
+                id=COMPANY["id"], name=COMPANY["name"], primary_domain=COMPANY["primaryDomain"],
+                credit_balance=0,  # set for real below, once the ledger is seeded
+            )
+        )
         inserted += 1
+        await db.flush()
 
     for item in ANON_INTERVIEWERS:
-        if not await db["anonymous_interviewers"].find_one({"id": item["id"]}):
-            await db["anonymous_interviewers"].insert_one(dict(item))
-            inserted += 1
+        if await db.get(AnonymousInterviewer, item["id"]):
+            continue
+        db.add(
+            AnonymousInterviewer(
+                id=item["id"], display_name=item["displayName"], title=item["title"], email=item["email"],
+                specialties=item["specialties"], verified=item["verified"], sessions=item["sessions"],
+                external_sessions=item["externalSessions"], rating=item.get("rating"), added_at=parse_wire(item["addedAt"]),
+            )
+        )
+        inserted += 1
 
-    tx_coll = db["credit_transactions"]
     balance = 0
     for tx in _CREDIT_TX:
         balance += tx["amount"] if tx["kind"] == "earned" else -tx["amount"]
-        if not await tx_coll.find_one({"id": tx["id"]}):
-            await tx_coll.insert_one({**tx, "balanceAfter": balance})
-            inserted += 1
+        if await db.get(CreditTransaction, tx["id"]):
+            continue
+        db.add(
+            CreditTransaction(
+                id=tx["id"], at=_parse_iso(tx["at"]), kind=tx["kind"], amount=tx["amount"],
+                reason=tx["reason"], balance_after=balance, interviewer_id=tx.get("interviewerId"),
+            )
+        )
+        inserted += 1
+    company = await db.get(Company, COMPANY["id"])
+    if company is not None:
+        company.credit_balance = balance  # maintained column — set once from the seeded ledger
 
-    if not await db["credit_rate"].find_one({"key": "default"}):
-        await db["credit_rate"].insert_one(dict(CREDIT_RATE))
+    if not await db.get(CreditRate, "default"):
+        db.add(
+            CreditRate(
+                id="default", rupees_per_credit=CREDIT_RATE["rupeesPerCredit"],
+                rate_updated_at=parse_wire(CREDIT_RATE["updatedAt"]), updated_by=CREDIT_RATE["updatedBy"],
+            )
+        )
         inserted += 1
 
     for item in TEAM:
-        if not await db["team_members"].find_one({"id": item["id"]}):
-            await db["team_members"].insert_one(dict(item))
-            inserted += 1
-
-    if not await db["billing"].find_one({"key": "default"}):
-        await db["billing"].insert_one(dict(BILLING))
+        if await db.get(TeamMember, item["id"]):
+            continue
+        db.add(
+            TeamMember(
+                id=item["id"], name=item["name"], email=item["email"], role=item["role"],
+                pipelines=item["pipelines"], last_active=item["lastActive"], status=item["status"],
+            )
+        )
         inserted += 1
 
-    for item in GRAY_FOLLOWUPS:
-        if not await db["gray_followups"].find_one({"id": item["id"]}):
-            await db["gray_followups"].insert_one(dict(item))
-            inserted += 1
+    if not await db.get(Billing, "default"):
+        summary = BILLING["summary"]
+        row = Billing(
+            id="default", plan=summary["plan"], seats=summary["seats"], seats_used=summary["seatsUsed"],
+            monthly_amount=summary["monthlyAmount"], next_billing=summary["nextBilling"],
+            includes=summary["includes"], ai_chats_used=summary["aiChatsUsed"],
+            ai_chats_included=summary["aiChatsIncluded"],
+        )
+        row.invoices = [
+            {"id": i["id"], "month": i["month"], "amount": i["amount"], "status": i["status"],
+             "pdf_url": i["pdfUrl"]}
+            for i in BILLING["invoices"]
+        ]
+        db.add(row)
+        inserted += 1
 
     for item in SEARCH_CANDIDATES:
-        if not await db["search_candidates"].find_one({"id": item["id"]}):
-            await db["search_candidates"].insert_one(dict(item))
-            inserted += 1
+        if await db.get(SearchCandidate, item["id"]):
+            continue
+        db.add(
+            SearchCandidate(
+                id=item["id"], name=item["name"], initials=item["initials"], title=item["title"],
+                years=item["years"], location=item["location"], verification_score=item["verificationScore"],
+                match_percent=item["matchPercent"], verified_skills=item["verifiedSkills"],
+                gray_skills=item["graySkills"], last_activity=item["lastActivity"],
+            )
+        )
+        inserted += 1
+    await db.flush()  # search_candidates must exist before FK-dependent rows below
 
-    if not await db["search_facets"].find_one({"key": "default"}):
-        await db["search_facets"].insert_one({"key": "default", **SEARCH_FACETS})
+    for item in GRAY_FOLLOWUPS:
+        if await db.get(GrayFollowup, item["id"]):
+            continue
+        db.add(
+            GrayFollowup(
+                id=item["id"], candidate=item["candidate"], candidate_id=item["candidateId"],
+                gray_area=item["grayArea"], asked=item["asked"], requested=item["requested"],
+                status=item["status"], companies=item.get("companies"), scheduled=item.get("scheduled"),
+                score=item.get("score"),
+            )
+        )
+        inserted += 1
+
+    if not await db.get(SearchFacets, "default"):
+        db.add(SearchFacets(id="default", skills=SEARCH_FACETS["skills"], locations=SEARCH_FACETS["locations"]))
         inserted += 1
 
     for item in PIPELINE_CARDS:
-        if not await db["pipeline_cards"].find_one({"candidateId": item["candidateId"]}):
-            await db["pipeline_cards"].insert_one(dict(item))
-            inserted += 1
+        if await db.get(PipelineCard, item["candidateId"]):
+            continue
+        db.add(
+            PipelineCard(
+                candidate_id=item["candidateId"], name=item["name"], initials=item["initials"],
+                match_percent=item["matchPercent"], last_activity=item["lastActivity"], stage=item["stage"],
+                note=item.get("note"),
+            )
+        )
+        inserted += 1
 
     for item in FOLLOWUP_SKILLS:
-        if not await db["followup_skills"].find_one({"id": item["id"]}):
-            await db["followup_skills"].insert_one(dict(item))
-            inserted += 1
+        if await db.get(FollowupSkillOption, item["id"]):
+            continue
+        db.add(FollowupSkillOption(id=item["id"], name=item["name"], requested=item["requested"]))
+        inserted += 1
 
+    if inserted:
+        await db.flush()
     return inserted

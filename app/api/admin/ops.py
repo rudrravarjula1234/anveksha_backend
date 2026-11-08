@@ -19,8 +19,10 @@ Contract mirror of `anveksha_ui/src/mocks/handlers/admin.ts`,
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.deps import get_current_principal, require_roles
+from app.db.session import get_session
 from app.schemas.admin_ops import (
     AdminCandidate,
     AdminCompany,
@@ -69,8 +71,8 @@ bots_simple_router = APIRouter(
 )
 
 
-def _service() -> AdminOpsService:
-    return AdminOpsService()
+def _service(db: AsyncSession = Depends(get_session)) -> AdminOpsService:
+    return AdminOpsService(db)
 
 
 # ─── Dashboard / overview / analytics ────────────────────────────────────

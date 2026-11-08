@@ -5,8 +5,10 @@ liveSessionSnapshot (candidate.ts). Privacy settings are stored per user
 so each persona owns their controls.
 """
 
-from app.db.mongo import get_database
-from app.db.seed_ledgers import AARAV_LEDGER
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.demo import DEMO_CANDIDATE_ID
+from app.core.timefmt import parse_wire
 
 _PRIVACY_DEFAULTS: dict = {
     "shareProfile": True,
@@ -58,7 +60,9 @@ DOSSIER: dict = {
     "candidateLocation": "Bengaluru",
     "years": 6,
     "verificationScore": 76,
-    "ledger": {k: v for k, v in AARAV_LEDGER.items()},
+    # No "ledger" key — the dossier references the live skill_ledgers row
+    # (candidate_id) rather than storing a duplicated snapshot; see the
+    # migration plan's confirmed decision and app/models/portal.py.
     "sessions": [
         {"id": "ses_001", "date": "Apr 26, 2026", "skill": "Kafka & Event Streams", "verifier": "Deepa Krishnan", "score": 76, "duration": 60, "verdict": "verified"},
         {"id": "ses_002", "date": "Mar 14, 2026", "skill": ".NET Microservices", "verifier": "S. Mehra", "score": 87, "duration": 60, "verdict": "verified"},
@@ -148,35 +152,115 @@ MY_INTERVIEWS: list[dict] = [
 ]
 
 
-async def seed_portal() -> int:
-    db = get_database()
+async def seed_portal(db: AsyncSession) -> int:
+    from app.models.portal import (
+        BookingCatalog,
+        Dossier,
+        DossierSession,
+        LiveSessionSnapshot,
+        MyInterview,
+        PrivacySettings,
+    )
+
     inserted = 0
 
-    privacy = db["privacy_settings"]
     for item in PRIVACY_SEEDS:
-        if not await privacy.find_one({"userId": item["userId"]}):
-            await privacy.insert_one(dict(item))
-            inserted += 1
-
-    dossiers = db["dossiers"]
-    if not await dossiers.find_one({"id": DOSSIER["id"]}):
-        await dossiers.insert_one(dict(DOSSIER))
+        if await db.get(PrivacySettings, item["userId"]):
+            continue
+        row = PrivacySettings(
+            user_id=item["userId"], share_profile=item["shareProfile"],
+            share_dossiers=item["shareDossiers"], share_transcripts=item["shareTranscripts"],
+            allow_gray_followups=item["allowGrayFollowups"], hide_from_companies=item["hideFromCompanies"],
+            discoverability=item["discoverability"], share_score=item["shareScore"],
+            share_gap=item["shareGap"], share_gray=item["shareGray"],
+            share_transcript=item["shareTranscript"], allow_followup=item["allowFollowup"],
+            anonymous_mode=item["anonymousMode"], share_verifier_panel=item["shareVerifierPanel"],
+        )
+        row.shared_reports = [
+            {"id": r["id"], "report_id": r["reportId"], "shared_with": r["sharedWith"],
+             "shared_at": r["sharedAt"], "expires_at": r["expiresAt"], "status": r["status"]}
+            for r in item["sharedReports"]
+        ]
+        db.add(row)
         inserted += 1
 
-    catalogs = db["booking_catalogs"]
-    if not await catalogs.find_one({"catalogId": BOOKING_CATALOG["catalogId"]}):
-        await catalogs.insert_one(dict(BOOKING_CATALOG))
+    if not await db.get(Dossier, DOSSIER["id"]):
+        row = Dossier(
+            id=DOSSIER["id"], candidate_id=DOSSIER["candidateId"], candidate_name=DOSSIER["candidateName"],
+            candidate_initials=DOSSIER["candidateInitials"], candidate_title=DOSSIER["candidateTitle"],
+            candidate_location=DOSSIER["candidateLocation"], years=DOSSIER["years"],
+            verification_score=DOSSIER["verificationScore"], gray_areas=DOSSIER["grayAreas"],
+            strengths=DOSSIER["strengths"], is_shared=DOSSIER["isShared"],
+        )
+        row.sessions = [
+            DossierSession(session_id=s["id"], date=s["date"], skill=s["skill"], verifier=s["verifier"],
+                            score=s["score"], duration=s["duration"], verdict=s["verdict"])
+            for s in DOSSIER["sessions"]
+        ]
+        db.add(row)
         inserted += 1
 
-    sessions = db["live_sessions"]
-    if not await sessions.find_one({"id": LIVE_SESSION["id"]}):
-        await sessions.insert_one(dict(LIVE_SESSION))
+    if not await db.get(BookingCatalog, BOOKING_CATALOG["catalogId"]):
+        row = BookingCatalog(
+            catalog_id=BOOKING_CATALOG["catalogId"], skill_name=BOOKING_CATALOG["skillName"],
+            description=BOOKING_CATALOG["description"], depth=BOOKING_CATALOG["depth"],
+            duration=BOOKING_CATALOG["duration"], style=BOOKING_CATALOG["style"],
+            format=BOOKING_CATALOG["format"], evidence=BOOKING_CATALOG["evidence"],
+            probes=BOOKING_CATALOG["probes"], week_range=BOOKING_CATALOG["weekRange"],
+        )
+        row.days = [
+            {"day_key": d["id"], "day": d["day"], "date": d["date"], "status": d["status"],
+             "slot_count": d["slotCount"]}
+            for d in BOOKING_CATALOG["days"]
+        ]
+        row.slots = [
+            {"day_key": day_key, "slot_key": s["id"], "time": s["time"], "verifier": s["verifier"],
+             "rating": s["rating"], "duration": s["duration"]}
+            for day_key, slots in BOOKING_CATALOG["slotsByDay"].items()
+            for s in slots
+        ]
+        db.add(row)
         inserted += 1
 
-    interviews = db["my_interviews"]
+    if not await db.get(LiveSessionSnapshot, LIVE_SESSION["id"]):
+        row = LiveSessionSnapshot(
+            id=LIVE_SESSION["id"], catalog_id=LIVE_SESSION["catalogId"], skill=LIVE_SESSION["skill"],
+            status=LIVE_SESSION["status"], elapsed_seconds=LIVE_SESSION["elapsedSeconds"],
+            candidate_name=LIVE_SESSION["candidate"]["name"],
+            candidate_initials=LIVE_SESSION["candidate"]["initials"],
+            candidate_color=LIVE_SESSION["candidate"]["color"],
+            verifier_name=LIVE_SESSION["verifier"]["name"],
+            verifier_initials=LIVE_SESSION["verifier"]["initials"],
+            verifier_color=LIVE_SESSION["verifier"]["color"],
+            current_probe=LIVE_SESSION["currentProbe"], suggested_probes=LIVE_SESSION["suggestedProbes"],
+            unverified_claim_text=LIVE_SESSION["unverifiedClaim"]["text"],
+            unverified_claim_at=LIVE_SESSION["unverifiedClaim"]["at"],
+        )
+        row.transcript = [
+            {"t": t["t"], "who": t["who"], "text": t["text"]} for t in LIVE_SESSION["transcript"]
+        ]
+        row.phases = [
+            {"num": p["num"], "title": p["title"], "done": p["done"], "active": p["active"]}
+            for p in LIVE_SESSION["phases"]
+        ]
+        row.assessment = [
+            {"label": a["label"], "value": a["value"], "tag": a["tag"]}
+            for a in LIVE_SESSION["assessment"]
+        ]
+        db.add(row)
+        inserted += 1
+
     for item in MY_INTERVIEWS:
-        if not await interviews.find_one({"id": item["id"]}):
-            await interviews.insert_one(dict(item))
-            inserted += 1
+        if await db.get(MyInterview, item["id"]):
+            continue
+        db.add(
+            MyInterview(
+                id=item["id"], user_id=DEMO_CANDIDATE_ID, catalog_id=item["catalog_id"], title=item["title"],
+                status=item["status"], scheduled_date=parse_wire(item["scheduled_date"]),
+            )
+        )
+        inserted += 1
 
+    if inserted:
+        await db.flush()
     return inserted

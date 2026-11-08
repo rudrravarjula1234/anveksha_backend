@@ -19,7 +19,6 @@ from app.temporal.activities import (
 from app.temporal.compat import TEMPORAL_AVAILABLE
 from app.ws.hub import ConnectionManager
 
-
 # ── WebSocket hub (pure, no Temporal) ──────────────────────────────────────
 
 
@@ -70,15 +69,30 @@ async def test_ws_hub_send_to_unknown_user_is_noop():
 
 
 @pytest.mark.asyncio
-async def test_run_agent_activity_returns_envelope(fake_db):  # noqa: ARG001 — seeds DB
-    from app.db.seed_agent_registry import seed_agent_registry
-
+async def test_run_agent_activity_returns_envelope(monkeypatch: pytest.MonkeyPatch):
     # Importing registers the deterministic fallbacks (a side effect that
     # main.create_app() performs at startup — done explicitly here since the
     # ASGI lifespan doesn't run for this unit-level test).
     import app.services.agent_fallbacks  # noqa: F401, PLC0415
+    from app.core.config import get_settings
+    from app.db.seed_agent_registry import seed_agent_registry
+    from app.db.session import connect_to_db, get_sessionmaker
 
-    await seed_agent_registry()
+    # run_agent_activity opens its own session (no FastAPI request cycle in
+    # a Temporal activity — see app/temporal/activities.py), so this needs
+    # the real engine connected and the seed committed for real, matching
+    # production shape, rather than the pg_session/pg_client fixtures'
+    # rolled-back-transaction isolation (a separate connection wouldn't see
+    # uncommitted work on pg_session's connection anyway). Idempotent and
+    # harmless to leave committed — same 6 fixed ids every run.
+    # Point DATABASE_URL at the test Postgres for this — don't assume it's
+    # already aliased to TEST_DATABASE_URL by whatever .env is in play.
+    monkeypatch.setattr(get_settings(), "DATABASE_URL", get_settings().TEST_DATABASE_URL)
+    await connect_to_db()
+    async with get_sessionmaker()() as db:
+        await seed_agent_registry(db)
+        await db.commit()
+
     out = await run_agent_activity("gray_analyzer", {"candidateId": "usr_cand_001"})
     assert out["agentId"] == "gray_analyzer"
     # No LLM creds in tests → deterministic fallback path.

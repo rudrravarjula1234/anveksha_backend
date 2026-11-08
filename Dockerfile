@@ -9,8 +9,8 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /build
 
-# Build deps for any wheels that need compilation (motor/pymongo are pure
-# Python in modern releases but we keep this defensive for forward-compat).
+# Build deps for any wheels that need compilation (psycopg[binary] ships
+# its own wheels, but we keep this defensive for forward-compat).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
     && rm -rf /var/lib/apt/lists/*

@@ -30,3 +30,6 @@ docker-compose.override.yml
 # Build artefacts
 dist/
 build/
+
+# Benchmark output (regenerate with: python -m bench.run_bench --label <name>)
+bench/artifacts/

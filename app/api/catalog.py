@@ -8,8 +8,10 @@ Published assessments only. Any authenticated user can browse.
 """
 
 from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.deps import get_current_principal
+from app.db.session import get_session
 from app.schemas.assessment import AssessmentFull, CatalogAssessment, CouponCode
 from app.services.assessment_service import AssessmentService, CouponService
 
@@ -19,12 +21,12 @@ router = APIRouter(
 )
 
 
-def _assessments() -> AssessmentService:
-    return AssessmentService()
+def _assessments(db: AsyncSession = Depends(get_session)) -> AssessmentService:
+    return AssessmentService(db)
 
 
-def _coupons() -> CouponService:
-    return CouponService()
+def _coupons(db: AsyncSession = Depends(get_session)) -> CouponService:
+    return CouponService(db)
 
 
 @router.get("", response_model=list[CatalogAssessment])

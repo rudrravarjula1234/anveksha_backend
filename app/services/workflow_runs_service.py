@@ -1,60 +1,60 @@
-"""Durable record of every Temporal workflow run.
+"""Ledger of every Temporal workflow run (`workflow_runs` table), so the
+admin dashboard can report started/running/completed/failed counts
+without querying a live Temporal server.
 
-A small Mongo-backed ledger (`workflow_runs` collection) so the admin
-dashboard can report how many agent workflows were started, are running,
-completed, or failed — WITHOUT querying a live Temporal server (which may
-be down, and isn't reachable from the hermetic test suite).
-
-Write path:
-- `record_started` is called by `workflow_service.start_agent_workflow`
-  immediately after Temporal accepts the workflow.
-- `record_finished` is called by the durable `record_workflow_finished`
-  activity when the workflow reaches a terminal state on the worker.
-
-Read path:
-- `get_stats` powers the dashboard's workflow tile.
+Each function takes an optional `db: AsyncSession` — pass the
+request-scoped session when available, otherwise a short-lived session is
+opened and committed internally (e.g. from the Temporal activity that
+records a finished run).
 """
 
-from datetime import datetime, timezone
-from typing import Any
+from typing import Optional
 
-from app.db.mongo import get_database
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-COLLECTION = "workflow_runs"
+from app.core.timefmt import utc_now
+from app.db.session import session_scope
+from app.models.workflow import WorkflowRun, WorkflowRunStatusCount
+
+_STATUSES = ("running", "completed", "failed")
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-async def record_started(workflow_id: str, agent_id: str, user_id: str = "") -> None:
+async def record_started(
+    workflow_id: str, agent_id: str, user_id: Optional[str] = None, db: Optional[AsyncSession] = None
+) -> None:
     """Insert a `running` ledger row for a freshly started workflow."""
-    await get_database()[COLLECTION].insert_one(
-        {
-            "workflowId": workflow_id,
-            "agentId": agent_id,
-            "userId": user_id,
-            "status": "running",
-            "startedAt": _now_iso(),
-            "finishedAt": None,
-        }
-    )
+    row = WorkflowRun(workflow_id=workflow_id, agent_id=agent_id, user_id=user_id or None, status="running")
+    async with session_scope(db, write=True) as session:
+        session.add(row)
 
 
-async def record_finished(workflow_id: str, status: str) -> None:
+async def _apply_finished(session: AsyncSession, workflow_id: str, status: str) -> None:
+    row = await session.get(WorkflowRun, workflow_id)
+    if row is not None:
+        row.status = status
+        row.finished_at = utc_now()
+
+
+async def record_finished(workflow_id: str, status: str, db: Optional[AsyncSession] = None) -> None:
     """Move a row to its terminal state. `status` is 'completed' or 'failed'."""
-    await get_database()[COLLECTION].find_one_and_update(
-        {"workflowId": workflow_id},
-        {"$set": {"status": status, "finishedAt": _now_iso()}},
-    )
+    async with session_scope(db, write=True) as session:
+        await _apply_finished(session, workflow_id, status)
 
 
-async def get_stats() -> dict[str, int]:
+async def _query_stats(session: AsyncSession) -> dict[str, int]:
+    # Trigger-maintained rollup: three rows, not a scan of every run.
+    stmt = select(WorkflowRunStatusCount.status, WorkflowRunStatusCount.runs)
+    counts = {status: int(n) for status, n in (await session.execute(stmt)).all()}
+    return {
+        "total": sum(counts.values()),
+        "running": counts.get("running", 0),
+        "completed": counts.get("completed", 0),
+        "failed": counts.get("failed", 0),
+    }
+
+
+async def get_stats(db: Optional[AsyncSession] = None) -> dict[str, int]:
     """Counts across the whole ledger: total / running / completed / failed."""
-    docs: list[dict[str, Any]] = await get_database()[COLLECTION].find().to_list(length=None)
-    stats = {"total": len(docs), "running": 0, "completed": 0, "failed": 0}
-    for d in docs:
-        status = d.get("status")
-        if status in ("running", "completed", "failed"):
-            stats[status] += 1
-    return stats
+    async with session_scope(db) as session:
+        return await _query_stats(session)

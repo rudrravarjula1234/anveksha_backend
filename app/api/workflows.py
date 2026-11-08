@@ -12,8 +12,10 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, WebSocket, WebSocketDisconnect
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.deps import Principal, get_current_principal, require_roles
+from app.db.session import get_session
 from app.services import workflow_service
 from app.ws.hub import connection_manager
 
@@ -26,6 +28,7 @@ router = APIRouter(tags=["Workflows"])
 async def start_agent_workflow(
     body: dict[str, Any] = Body(...),
     principal: Principal = Depends(get_current_principal),
+    db: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     """Start a durable run of a registry agent.
 
@@ -41,7 +44,7 @@ async def start_agent_workflow(
         raise ValidationError("agentId is required")
     context = body.get("context") or {}
     return await workflow_service.start_agent_workflow(
-        agent_id, context, user_id=principal.user_id or ""
+        agent_id, context, user_id=principal.user_id or "", db=db
     )
 
 

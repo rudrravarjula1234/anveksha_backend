@@ -1,10 +1,12 @@
 """Skill-ledger seed data — mirror of anveksha_ui/src/mocks/data/candidate.ts.
 
-One document per persona in the `skill_ledgers` collection, keyed by
-`candidateId`. Inserted only when missing (idempotent).
+One row per persona in the `skill_ledgers` table (Postgres), keyed by
+`candidate_id`. Inserted only when missing (idempotent).
 """
 
-from app.db.mongo import get_database
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.timefmt import parse_wire, parse_wire_opt
 
 AARAV_LEDGER: dict = {
     "candidateId": "usr_cand_001",
@@ -236,14 +238,76 @@ SURESH_LEDGER: dict = {
 SEED_LEDGERS = [AARAV_LEDGER, MAYA_LEDGER, SURESH_LEDGER]
 
 
-async def seed_skill_ledgers() -> int:
-    db = get_database()
-    coll = db["skill_ledgers"]
+def _build_ledger(template: dict):
+    from app.models.skill import (
+        InterviewerAuthority,
+        SkillLedger,
+        SkillLedgerRow,
+    )
+
+    status = template["interviewerStatus"]
+    stats = status.get("stats") or {}
+    ledger = SkillLedger(
+        candidate_id=template["candidateId"],
+        candidate_name=template["candidateName"],
+        candidate_title=template["candidateTitle"],
+        candidate_location=template["candidateLocation"],
+        candidate_initials=template["candidateInitials"],
+        dossier_id=template["dossierId"],
+        verification_score=template["verificationScore"],
+        verified_count=template["verifiedCount"],
+        partial_count=template["partialCount"],
+        gray_count=template["grayCount"],
+        top_percent=template["topPercent"],
+        interviewer_mode=status.get("mode", "none"),
+        interviewer_origin=status.get("origin"),
+        interviewer_approved_by=status.get("approvedBy"),
+        interviewer_approved_at=parse_wire_opt(status.get("approvedAt")),
+        interviewer_bio=status.get("bio"),
+        stats_sessions=stats.get("sessions"),
+        stats_rating=stats.get("rating"),
+        stats_reliability=stats.get("reliability"),
+        stats_peer_score=stats.get("peerScore"),
+        stats_appeal_rate=stats.get("appealRate"),
+        stats_average_review_minutes=stats.get("averageReviewMinutes"),
+        stats_monthly_earnings=stats.get("monthlyEarnings"),
+    )
+    ledger.skills = [
+        SkillLedgerRow(
+            skill_id=s["id"],
+            name=s["name"],
+            state=s["state"],
+            depth=s["depth"],
+            score=s.get("score"),
+            last_verified=s.get("lastVerified"),
+            sessions=s.get("sessions", 0),
+            report_id=s.get("reportId"),
+            authority=s.get("authority"),
+            authority_since=parse_wire_opt(s.get("authoritySince")),
+        )
+        for s in template["skills"]
+    ]
+    ledger.authorities = [
+        InterviewerAuthority(skill_id=a["skillId"], skill_name=a["skillName"], approved_at=parse_wire(a["approvedAt"]))
+        for a in status.get("authorities", [])
+    ]
+    ledger.external_proofs = [
+        {"proof_id": p["id"], "label": p["label"], "url": p["url"]}
+        for p in status.get("externalProof") or []
+    ]
+    return ledger
+
+
+async def seed_skill_ledgers(db: AsyncSession) -> int:
+    from app.models.skill import SkillLedger
+
     inserted = 0
     for template in SEED_LEDGERS:
-        existing = await coll.find_one({"candidateId": template["candidateId"]})
+        existing = await db.get(SkillLedger, template["candidateId"])
         if existing:
             continue
-        await coll.insert_one(dict(template))
+        db.add(_build_ledger(template))
         inserted += 1
+    if inserted:
+        await db.flush()
     return inserted

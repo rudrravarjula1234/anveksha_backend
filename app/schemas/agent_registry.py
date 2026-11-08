@@ -1,10 +1,7 @@
-"""Agent registry schemas.
-
-Anveksha ships a fixed set of PRE-DEFINED agents (brief generation,
-report generation, gap/gray analysis, candidate search, candidate chat).
-Admins can re-point each agent at a different AI model and edit its
-system message — both stored in Mongo. The registry rows are config,
-not runtime state.
+"""Agent registry schemas. Anveksha ships a fixed set of pre-defined
+agents (brief, report, gap/gray analysis, search, chat); admins can
+re-point each at a different AI model and edit its system message. These
+rows are config, not runtime state.
 """
 
 from typing import Literal, Optional

@@ -9,7 +9,8 @@ Routes:
     GET    /api/agents/token-usage             — recent token usage rows (admin)
     POST   /api/agents/feedback                — generate interview feedback (admin/interviewer)
 
-NOT mounted in `app.main` yet — the integrator wires the prefix.
+Mounted in `app.main` at prefix="/api/agents" (alongside
+`agent_settings.shared_router`'s different sub-paths on the same prefix).
 
 The agents package is import-safe without the optional AutoGen packages;
 `POST /feedback` returns 503 until they are installed and a provider
@@ -18,7 +19,8 @@ credential is configured (see ``app/agents/README.md``).
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents import credentials as credential_store
 from app.agents import model_config_adapter
@@ -33,6 +35,8 @@ from app.agents.schemas import (
 )
 from app.agents.token_usage import store as token_usage_store
 from app.auth.deps import get_current_principal, require_roles
+from app.core.exceptions import AppError, NotFoundError
+from app.db.session import get_session
 
 router = APIRouter(tags=["Agents"])
 
@@ -44,10 +48,10 @@ _KEYLESS_PROVIDERS = {"ollama"}
 
 
 @router.get("/status", dependencies=[Depends(get_current_principal)])
-async def agent_status() -> dict[str, Any]:
+async def agent_status(db: AsyncSession = Depends(get_session)) -> dict[str, Any]:
     """Report framework availability and configuration state."""
-    providers = await credential_store.configured_providers()
-    active_models = await model_config_adapter.count_active_models()
+    providers = await credential_store.configured_providers(db=db)
+    active_models = await model_config_adapter.count_active_models(db=db)
     return {
         "autogen_available": AUTOGEN_AVAILABLE,
         "configured_providers": providers,
@@ -65,9 +69,9 @@ async def agent_status() -> dict[str, Any]:
     response_model=list[CredentialMasked],
     dependencies=[Depends(require_roles("admin"))],
 )
-async def list_credentials() -> list[dict[str, Any]]:
+async def list_credentials(db: AsyncSession = Depends(get_session)) -> list[dict[str, Any]]:
     """Masked list — plaintext keys never leave the server."""
-    return await credential_store.list_credentials(active_only=False)
+    return await credential_store.list_credentials(active_only=False, db=db)
 
 
 @router.post(
@@ -76,13 +80,16 @@ async def list_credentials() -> list[dict[str, Any]]:
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_roles("admin"))],
 )
-async def upsert_credential(payload: CredentialUpsert) -> dict[str, Any]:
+async def upsert_credential(
+    payload: CredentialUpsert, db: AsyncSession = Depends(get_session)
+) -> dict[str, Any]:
     """Create or replace the credential for a provider (key encrypted at rest)."""
     return await credential_store.upsert_credential(
         provider=payload.provider,
         api_key=payload.api_key,
         endpoint=payload.endpoint,
         extra=payload.additional_config,
+        db=db,
     )
 
 
@@ -91,13 +98,10 @@ async def upsert_credential(payload: CredentialUpsert) -> dict[str, Any]:
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(require_roles("admin"))],
 )
-async def delete_credential(provider: str) -> None:
-    removed = await credential_store.delete_credential(provider)
+async def delete_credential(provider: str, db: AsyncSession = Depends(get_session)) -> None:
+    removed = await credential_store.delete_credential(provider, db=db)
     if not removed:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No active credential for provider '{provider}'",
-        )
+        raise NotFoundError(f"No active credential for provider '{provider}'")
 
 
 # ── Token usage (admin) ─────────────────────────────────────────────────
@@ -110,9 +114,10 @@ async def delete_credential(provider: str) -> None:
 )
 async def recent_token_usage(
     limit: int = Query(default=50, ge=1, le=500),
+    db: AsyncSession = Depends(get_session),
 ) -> list[TokenUsage]:
     """Most recent token usage rows, newest first."""
-    return await token_usage_store.list_recent(limit=limit)
+    return await token_usage_store.list_recent(limit=limit, db=db)
 
 
 # ── Interview feedback (admin or interviewer) ───────────────────────────
@@ -133,15 +138,19 @@ async def generate_feedback(
 
     Returns 503 when the AutoGen extras are not installed or no usable
     provider credential is configured.
+
+    Deliberately does NOT take `Depends(get_session)` — the LLM call below
+    can run for seconds, and holding a connection checked out of the
+    (small, fixed-size) pool for that long wastes a slot other requests
+    need. The config/credential lookups each open their own short-lived
+    session instead (see `app/agents/credentials.py`).
     """
     if not AUTOGEN_AVAILABLE:
-        raise HTTPException(
+        raise AppError(
+            "Agent framework dependencies not installed. Install the optional "
+            "agent extras (autogen-agentchat / autogen-ext, see "
+            "app/agents/README.md) to enable feedback generation.",
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                "Agent framework dependencies not installed. Install the optional "
-                "agent extras (autogen-agentchat / autogen-ext, see "
-                "app/agents/README.md) to enable feedback generation."
-            ),
         )
 
     # Resolve the model that will actually run, then verify its provider has
@@ -151,12 +160,10 @@ async def generate_feedback(
     if model_config is None:
         configs = await model_config_adapter.get_all_model_configs_dict()
         if not configs:
-            raise HTTPException(
+            raise AppError(
+                "No active models registered in ai_models. Create one via "
+                "POST /api/admin/models first.",
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=(
-                    "No active models registered in ai_models. Create one via "
-                    "POST /api/admin/models first."
-                ),
             )
         model_config = next(iter(configs.values()))
 
@@ -164,12 +171,10 @@ async def generate_feedback(
     if provider not in _KEYLESS_PROVIDERS:
         credential = await credential_store.get_credential(provider)
         if credential is None:
-            raise HTTPException(
+            raise AppError(
+                f"No API credential configured for provider '{provider}'. "
+                "Add one via POST /api/agents/credentials.",
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=(
-                    f"No API credential configured for provider '{provider}'. "
-                    "Add one via POST /api/agents/credentials."
-                ),
             )
 
     metadata = payload.metadata.model_dump(exclude_none=True) if payload.metadata else None

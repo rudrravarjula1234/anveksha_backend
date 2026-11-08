@@ -3,9 +3,19 @@
 Mirrors candidateExtras.ts, skillReportDetails.ts, notifications.ts.
 Compact literals — content matches the frontend mock byte-for-byte where
 the UI asserts on it.
+
+All of skill_reports/skill_report_details/insights/session_history/
+notifications belong to the one demo candidate (Aarav, usr_cand_001) in
+the source mocks — assigned that owner explicitly now that these tables
+are per-user (see the migration plan's scoping fix). public_profiles
+already carries its own real per-user key (userId) and is unaffected.
 """
 
-from app.db.mongo import get_database
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.timefmt import parse_wire
+
+_AARAV_USER_ID = "usr_cand_001"
 
 SKILL_REPORTS: list[dict] = [
     {"id": "SVR-KAF-88421", "skill": "Kafka & Event Streams", "verifier": "D. Krishnan", "score": 76, "date": "Apr 26", "status": "published", "companiesViewed": 3},
@@ -408,24 +418,193 @@ NOTIFICATIONS: list[dict] = [
 ]
 
 
-async def seed_candidate() -> int:
-    db = get_database()
+def _build_report_detail(template: dict):
+    from app.models.candidate import SkillReportDetail
+
+    row = SkillReportDetail(
+        id=template["id"],
+        user_id=_AARAV_USER_ID,
+        skill_id=template["skillId"],
+        assessment_title=template["assessmentTitle"],
+        candidate_name=template["candidate"]["name"],
+        candidate_ext_id=template["candidate"]["id"],
+        verifier_name=template["verifier"]["name"],
+        verifier_ext_id=template["verifier"]["id"],
+        verifier_title=template["verifier"]["title"],
+        verifier_rating=float(template["verifier"]["rating"]),
+        date=template["date"],
+        duration=template["duration"],
+        type=template["type"],
+        score=template["score"],
+        depth=template["depth"],
+        verdict=template["verdict"],
+        verdict_long=template["verdictLong"],
+        summary=template["summary"],
+    )
+    row.fit_signals = [
+        {"area": f["area"], "signal": f["signal"], "color": f["color"]} for f in template["fitSignals"]
+    ]
+    row.rubric = [{"row_id": r["id"], "dim": r["dim"], "score": r["score"]} for r in template["rubric"]]
+    row.phases = [
+        {"num": p["num"], "title": p["title"], "done": p["done"], "summary": p["summary"]}
+        for p in template["phases"]
+    ]
+    row.gaps = [
+        {"gap_id": g["id"], "area": g["area"], "evidence": g["evidence"], "severity": g["severity"]}
+        for g in template["gaps"]
+    ]
+    row.gray = [
+        {"item_id": g["id"], "area": g["area"], "companies": g["companies"]} for g in template["gray"]
+    ]
+    row.evidence = [
+        {
+            "evidence_id": e["id"], "t": e["t"], "type": e["type"], "speaker": e["speaker"], "text": e["text"],
+            "verdict": e["verdict"], "verdict_color": e["verdictColor"],
+        }
+        for e in template["evidence"]
+    ]
+    return row
+
+
+def _build_public_profile(template: dict):
+    from app.models.candidate import PublicProfile
+
+    row = PublicProfile(
+        user_id=template["userId"],
+        share_url=template["shareUrl"],
+        anv_id=template["anvId"],
+        last_updated=template["lastUpdated"],
+        headline=template["headline"],
+        views=template["views"],
+        unique_companies=template["uniqueCompanies"],
+        inbound_chats=template["inboundChats"],
+        about=template["about"],
+    )
+    row.highlights = [
+        {"highlight_id": h["id"], "skill": h["skill"], "score": h["score"]} for h in template["highlights"]
+    ]
+    row.constellation = [
+        {"name": c["name"], "score": c["score"], "state": c["state"]} for c in template["constellation"]
+    ]
+    row.timeline = [
+        {
+            "entry_id": t["id"], "date": t["date"], "skill": t["skill"], "score": t["score"], "type": t["type"],
+            "note": t.get("note"),
+        }
+        for t in template["timeline"]
+    ]
+    row.gray_areas = [
+        {"area_id": g["id"], "name": g["name"], "companies": g["companies"]}
+        for g in template["grayAreas"]
+    ]
+    return row
+
+
+async def seed_candidate(db: AsyncSession) -> int:
+    from app.models.candidate import (
+        AppNotification,
+        CandidateInsight,
+        OnboardingStep,
+        PublicProfile,
+        SessionHistoryRow,
+        SkillReport,
+        SkillReportDetail,
+    )
+
     inserted = 0
 
-    async def _fill(coll_name: str, items: list[dict], key: str = "id") -> int:
-        coll = db[coll_name]
-        n = 0
-        for item in items:
-            if not await coll.find_one({key: item[key]}):
-                await coll.insert_one(dict(item))
-                n += 1
-        return n
+    # skill_report_details before skill_reports — the latter's report_id FK
+    # references the former, and both share the same "SVR-*" id space here.
+    _detail_ids = {item["id"] for item in SKILL_REPORT_DETAILS}
+    for item in SKILL_REPORT_DETAILS:
+        if await db.get(SkillReportDetail, item["id"]):
+            continue
+        db.add(_build_report_detail(item))
+        inserted += 1
 
-    inserted += await _fill("skill_reports", SKILL_REPORTS)
-    inserted += await _fill("skill_report_details", SKILL_REPORT_DETAILS)
-    inserted += await _fill("insights", INSIGHTS)
-    inserted += await _fill("onboarding_steps", ONBOARDING_STEPS)
-    inserted += await _fill("public_profiles", PUBLIC_PROFILES, key="userId")
-    inserted += await _fill("session_history", SESSION_HISTORY)
-    inserted += await _fill("notifications", NOTIFICATIONS)
+    for item in SKILL_REPORTS:
+        if await db.get(SkillReport, item["id"]):
+            continue
+        db.add(
+            SkillReport(
+                id=item["id"],
+                user_id=_AARAV_USER_ID,
+                report_id=item["id"] if item["id"] in _detail_ids else None,
+                skill=item["skill"],
+                verifier=item["verifier"],
+                score=item["score"],
+                date=item["date"],
+                status=item["status"],
+                companies_viewed=item["companiesViewed"],
+            )
+        )
+        inserted += 1
+
+    for item in INSIGHTS:
+        if await db.get(CandidateInsight, item["id"]):
+            continue
+        db.add(
+            CandidateInsight(
+                id=item["id"],
+                user_id=_AARAV_USER_ID,
+                kind=item["kind"],
+                title=item["title"],
+                body=item["body"],
+                cta=item["cta"],
+                companies=item.get("companies"),
+                acted=item.get("acted", False),
+            )
+        )
+        inserted += 1
+
+    for item in ONBOARDING_STEPS:
+        if await db.get(OnboardingStep, item["id"]):
+            continue
+        db.add(OnboardingStep(id=item["id"], title=item["title"], body=item["body"], done=item["done"]))
+        inserted += 1
+
+    for item in PUBLIC_PROFILES:
+        if await db.get(PublicProfile, item["userId"]):
+            continue
+        db.add(_build_public_profile(item))
+        inserted += 1
+
+    for item in SESSION_HISTORY:
+        if await db.get(SessionHistoryRow, item["id"]):
+            continue
+        db.add(
+            SessionHistoryRow(
+                id=item["id"],
+                user_id=_AARAV_USER_ID,
+                report_id=item["id"] if item["id"] in _detail_ids else None,
+                skill=item["skill"],
+                date=item["date"],
+                duration=item["duration"],
+                verifier=item["verifier"],
+                score=item["score"],
+                status=item["status"],
+                note=item.get("note"),
+            )
+        )
+        inserted += 1
+
+    for item in NOTIFICATIONS:
+        if await db.get(AppNotification, item["id"]):
+            continue
+        db.add(
+            AppNotification(
+                id=item["id"],
+                user_id=_AARAV_USER_ID,
+                kind=item["kind"],
+                title=item["title"],
+                body=item["body"],
+                notified_at=parse_wire(item["createdAt"]),
+                read=item.get("read", False),
+                href=item.get("href"),
+            )
+        )
+        inserted += 1
+
+    if inserted:
+        await db.flush()
     return inserted

@@ -1,14 +1,12 @@
-import base64
-import json
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import update
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
-
-def _hdr(sub: str, role: str) -> dict[str, str]:
-    raw = json.dumps({"sub": sub, "role": role, "iat": 1700000000000})
-    return {"Authorization": "Bearer dev_" + base64.b64encode(raw.encode()).decode()}
-
+from app.models.company import Company
+from tests.helpers import hdr as _hdr
 
 COMPANY = ("usr_co_001", "company")
 ADMIN = ("usr_adm_001", "admin")
@@ -65,18 +63,28 @@ async def test_interviewer_lifecycle_and_credits(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_credits_seeded_balance_and_overspend(client: AsyncClient):
+async def test_credits_seeded_balance_and_overspend(client: AsyncClient, pg_session: AsyncSession):
     r = await client.get("/api/companies/me/credits", headers=_hdr(*COMPANY))
     body = r.json()
     assert body["balance"] == 570  # 800 earned - 230 spent
     assert len(body["ledger"]) == 7
 
+    # Spending the exact balance is allowed; one more credit is not.
     r = await client.post(
-        "/api/companies/me/credits/spend",
-        json={"amount": 99999, "reason": "too much"},
-        headers=_hdr(*COMPANY),
+        "/api/companies/me/credits/spend", json={"amount": 570, "reason": "all of it"}, headers=_hdr(*COMPANY)
+    )
+    assert r.status_code == 200
+    assert r.json()["balance"] == 0
+    assert r.json()["ledger"][-1]["balanceAfter"] == 0
+    r = await client.post(
+        "/api/companies/me/credits/spend", json={"amount": 1, "reason": "one more"}, headers=_hdr(*COMPANY)
     )
     assert r.status_code == 402
+
+    # The schema refuses a negative balance even from a raw write.
+    with pytest.raises(IntegrityError):
+        async with pg_session.begin_nested():
+            await pg_session.execute(update(Company).values(credit_balance=-1))
 
 
 @pytest.mark.asyncio

@@ -1,17 +1,19 @@
-"""Aggregates platform-wide metrics for the admin dashboard.
-
-One read across the operational collections — agents, bots, models,
-users, token usage, and the workflow-run ledger — folded into a single
-typed envelope. Token totals are summed in Python (not via a Mongo
-aggregation pipeline) so the same code path runs against the in-memory
-test stub and a real Mongo.
+"""Aggregates platform-wide metrics for the admin dashboard — one read
+across agents, bots, models, users, token usage, and the workflow-run
+ledger, folded into a single typed envelope, all via SQL aggregates
+(no Python-side full-table scans).
 """
 
-from collections import defaultdict
-from datetime import datetime, timezone
-from typing import Any
 
-from app.db.mongo import get_database
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.timefmt import to_wire, utc_now
+from app.models.agent_registry import AgentConfig
+from app.models.ai_model import AIModel
+from app.models.bot import Bot
+from app.models.token_usage import TokenUsageModelTotals
+from app.models.user import User, UserRole
 from app.schemas.admin_metrics import (
     AgentCounts,
     BotCounts,
@@ -27,86 +29,100 @@ from app.temporal.compat import TEMPORAL_AVAILABLE
 
 
 class PlatformMetricsService:
-    def _db(self):
-        return get_database()
-
-    async def _all(self, coll: str) -> list[dict[str, Any]]:
-        return await self._db()[coll].find().to_list(length=None)
+    def __init__(self, db: AsyncSession) -> None:
+        self.db = db
 
     async def _agents(self) -> AgentCounts:
-        docs = await self._all("agent_registry")
-        enabled = sum(1 for d in docs if d.get("enabled", True))
-        return AgentCounts(total=len(docs), enabled=enabled, disabled=len(docs) - enabled)
+        # agent_registry is Postgres now (see the migration plan).
+        # M1: one aggregate with a conditional count instead of two queries.
+        total, enabled = (
+            await self.db.execute(
+                select(
+                    func.count(AgentConfig.id),
+                    func.count(AgentConfig.id).filter(AgentConfig.enabled.is_(True)),
+                )
+            )
+        ).one()
+        return AgentCounts(total=total, enabled=enabled, disabled=total - enabled)
 
     async def _bots(self) -> BotCounts:
-        docs = await self._all("bots")
-        by = defaultdict(int)
-        for d in docs:
-            by[d.get("status", "draft")] += 1
+        # `bots` is Postgres now (merged with the old bots_simple — see
+        # the migration plan's Stage 3). "paused" (simple-view-only
+        # status) folds into "inactive" here, matching bot_service.py's
+        # rich-view status mapping.
+        # M1: the grouped query yields every bucket (total = sum of groups),
+        # so the separate `COUNT(*)` pass is gone.
+        by: dict[str, int] = {}
+        rows = await self.db.execute(select(Bot.status, func.count()).group_by(Bot.status))
+        for status, count in rows.all():
+            by[status] = count
+        total = sum(by.values())
         return BotCounts(
-            total=len(docs),
-            active=by["active"],
-            inactive=by["inactive"],
-            draft=by["draft"],
+            total=total,
+            active=by.get("active", 0),
+            inactive=by.get("inactive", 0) + by.get("paused", 0),
+            draft=by.get("draft", 0),
         )
 
     async def _models(self) -> ModelCounts:
-        docs = await self._all("ai_models")
-        active = sum(1 for d in docs if d.get("status") == "active")
-        return ModelCounts(total=len(docs), active=active, inactive=len(docs) - active)
+        # M1: conditional count — total + active in one pass.
+        total, active = (
+            await self.db.execute(
+                select(
+                    func.count(AIModel.id),
+                    func.count(AIModel.id).filter(AIModel.status == "active"),
+                )
+            )
+        ).one()
+        return ModelCounts(total=total, active=active, inactive=total - active)
 
     async def _users(self) -> UserCounts:
-        docs = await self._all("users")
-
-        def with_role(role: str) -> int:
-            return sum(1 for d in docs if role in (d.get("roles") or []))
-
+        # M1: one query — a scalar subquery for the users total plus FILTER
+        # counts per role, instead of 1 + 4 separate COUNT round-trips.
+        total, candidates, interviewers, companies, admins = (
+            await self.db.execute(
+                select(
+                    select(func.count()).select_from(User).scalar_subquery(),
+                    func.count(UserRole.role).filter(UserRole.role == "candidate"),
+                    func.count(UserRole.role).filter(UserRole.role == "interviewer"),
+                    func.count(UserRole.role).filter(UserRole.role == "company"),
+                    func.count(UserRole.role).filter(UserRole.role == "admin"),
+                )
+            )
+        ).one()
         return UserCounts(
-            total=len(docs),
-            candidates=with_role("candidate"),
-            interviewers=with_role("interviewer"),
-            companies=with_role("company"),
-            admins=with_role("admin"),
+            total=total,
+            candidates=candidates,
+            interviewers=interviewers,
+            companies=companies,
+            admins=admins,
         )
 
     async def _tokens(self) -> TokenMetrics:
-        docs = await self._all("token_usage")
-        by_model: dict[str, dict[str, float]] = defaultdict(
-            lambda: {"totalTokens": 0, "totalCostUsd": 0.0, "requests": 0}
-        )
-        total_in = total_out = total_tok = 0
-        total_cost = 0.0
-        for d in docs:
-            name = d.get("model_name", "unknown")
-            tokens = int(d.get("total_tokens", 0) or 0)
-            cost = float(d.get("total_cost", 0.0) or 0.0)
-            total_in += int(d.get("input_tokens", 0) or 0)
-            total_out += int(d.get("output_tokens", 0) or 0)
-            total_tok += tokens
-            total_cost += cost
-            by_model[name]["totalTokens"] += tokens
-            by_model[name]["totalCostUsd"] += cost
-            by_model[name]["requests"] += 1
+        # One row per model, kept current by the `trg_token_usage_totals`
+        # trigger, so this never aggregates the whole token_usage ledger.
+        stmt = select(TokenUsageModelTotals).order_by(TokenUsageModelTotals.total_tokens.desc())
+        rows = (await self.db.execute(stmt)).scalars().all()
         breakdown = [
             ModelTokenBreakdown(
-                modelName=name,
-                totalTokens=int(v["totalTokens"]),
-                totalCostUsd=round(v["totalCostUsd"], 6),
-                requests=int(v["requests"]),
+                modelName=r.model_name,
+                totalTokens=int(r.total_tokens),
+                totalCostUsd=round(float(r.total_cost), 6),
+                requests=int(r.requests),
             )
-            for name, v in sorted(by_model.items(), key=lambda kv: -kv[1]["totalTokens"])
+            for r in rows
         ]
         return TokenMetrics(
-            totalRequests=len(docs),
-            totalInputTokens=total_in,
-            totalOutputTokens=total_out,
-            totalTokens=total_tok,
-            totalCostUsd=round(total_cost, 6),
+            totalRequests=sum(int(r.requests) for r in rows),
+            totalInputTokens=sum(int(r.input_tokens) for r in rows),
+            totalOutputTokens=sum(int(r.output_tokens) for r in rows),
+            totalTokens=sum(int(r.total_tokens) for r in rows),
+            totalCostUsd=round(sum(float(r.total_cost) for r in rows), 6),
             byModel=breakdown,
         )
 
     async def _workflows(self) -> WorkflowCounts:
-        stats = await wruns.get_stats()
+        stats = await wruns.get_stats(self.db)
         return WorkflowCounts(available=bool(TEMPORAL_AVAILABLE), **stats)
 
     async def metrics(self) -> PlatformMetrics:
@@ -117,5 +133,5 @@ class PlatformMetricsService:
             users=await self._users(),
             tokens=await self._tokens(),
             workflows=await self._workflows(),
-            generatedAt=datetime.now(timezone.utc).isoformat(),
+            generatedAt=to_wire(utc_now()),
         )

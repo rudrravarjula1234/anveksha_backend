@@ -15,8 +15,10 @@ framework + credentials exist, deterministic fallback otherwise):
 from typing import Any, Optional
 
 from fastapi import APIRouter, Body, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.deps import Principal, get_current_principal, require_roles
+from app.db.session import get_session
 from app.schemas.agent_registry import AgentConfig, AgentConfigPatch, AgentRunResult
 from app.services.agent_registry_service import AgentRegistryService
 
@@ -34,8 +36,8 @@ shared_router = APIRouter(
 )
 
 
-def _service() -> AgentRegistryService:
-    return AgentRegistryService()
+def _service(db: AsyncSession = Depends(get_session)) -> AgentRegistryService:
+    return AgentRegistryService(db)
 
 
 # ─── Admin settings ──────────────────────────────────────────────────────
@@ -52,7 +54,7 @@ async def patch_agent(
     principal: Principal = Depends(require_roles("admin")),
     service: AgentRegistryService = Depends(_service),
 ) -> AgentConfig:
-    return await service.patch(agent_id, patch, principal.user_id or "usr_adm_001")
+    return await service.patch(agent_id, patch, principal.actor_id)
 
 
 @admin_router.post("/{agent_id}/reset", response_model=AgentConfig)
@@ -61,7 +63,7 @@ async def reset_agent(
     principal: Principal = Depends(require_roles("admin")),
     service: AgentRegistryService = Depends(_service),
 ) -> AgentConfig:
-    return await service.reset_system_message(agent_id, principal.user_id or "usr_adm_001")
+    return await service.reset_system_message(agent_id, principal.actor_id)
 
 
 # ─── Feature executions ──────────────────────────────────────────────────

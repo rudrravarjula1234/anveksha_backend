@@ -1,11 +1,11 @@
 """Pre-defined agent registry seed.
 
 Six agents ship with the platform. Admins can re-point the model and
-edit the system message per agent (stored here in Mongo); `defaultSystemMessage`
-is kept immutable so a reset is always possible.
+edit the system message per agent (stored here in Postgres);
+`defaultSystemMessage` is kept immutable so a reset is always possible.
 """
 
-from app.db.mongo import get_database
+from sqlalchemy.ext.asyncio import AsyncSession
 
 _BRIEF_SM = (
     "You are Anveksha's interview-brief agent. Given a scheduled verification "
@@ -130,12 +130,29 @@ AGENT_SEEDS: list[dict] = [
 ]
 
 
-async def seed_agent_registry() -> int:
-    db = get_database()
-    coll = db["agent_registry"]
+async def seed_agent_registry(db: AsyncSession) -> int:
+    from app.models.agent_registry import AgentConfig
+    from app.repositories.agent_registry_repo import AgentRegistryRepository
+
+    repo = AgentRegistryRepository(db)
     inserted = 0
     for template in AGENT_SEEDS:
-        if not await coll.find_one({"id": template["id"]}):
-            await coll.insert_one(dict(template))
-            inserted += 1
+        if await repo.find_by_id(template["id"]):
+            continue
+        db.add(
+            AgentConfig(
+                id=template["id"],
+                name=template["name"],
+                description=template["description"],
+                used_by=template["usedBy"],
+                model_id=template["modelId"],
+                system_message=template["systemMessage"],
+                default_system_message=template["defaultSystemMessage"],
+                temperature=template["temperature"],
+                enabled=template["enabled"],
+            )
+        )
+        inserted += 1
+    if inserted:
+        await db.flush()
     return inserted

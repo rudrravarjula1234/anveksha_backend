@@ -6,8 +6,10 @@ and Temporal workflow stats. Mounted at prefix="/api/admin/metrics".
 """
 
 from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.deps import require_roles
+from app.db.session import get_session
 from app.schemas.admin_metrics import PlatformMetrics
 from app.services.platform_metrics_service import PlatformMetricsService
 
@@ -17,8 +19,8 @@ router = APIRouter(
 )
 
 
-def _service() -> PlatformMetricsService:
-    return PlatformMetricsService()
+def _service(db: AsyncSession = Depends(get_session)) -> PlatformMetricsService:
+    return PlatformMetricsService(db)
 
 
 @router.get("/platform", response_model=PlatformMetrics)

@@ -9,7 +9,12 @@ agent runs and durable workflows happen, their rows accumulate alongside.
 
 from datetime import datetime, timezone
 
-from app.db.mongo import get_database
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.ids import token_usage_id
+from app.models.token_usage import TokenUsage, TokenUsageAgentId
+from app.models.workflow import WorkflowRun
 
 # Mirrors a week of mixed agent traffic across the seeded models.
 _TOKEN_USAGE_SEEDS = [
@@ -44,38 +49,53 @@ _WORKFLOW_RUN_SEEDS = [
 ]
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-async def seed_token_usage() -> int:
-    db = get_database()
-    coll = db["token_usage"]
+async def seed_token_usage(db: AsyncSession) -> int:
     inserted = 0
     for row in _TOKEN_USAGE_SEEDS:
-        if not await coll.find_one({"request_id": row["request_id"]}):
-            doc = dict(row)
-            doc["currency"] = "USD"
-            doc["created_at"] = _now_iso()
-            await coll.insert_one(doc)
-            inserted += 1
+        stmt = select(TokenUsage).where(TokenUsage.request_id == row["request_id"])
+        if (await db.execute(stmt)).scalar_one_or_none() is not None:
+            continue
+        usage = TokenUsage(
+            id=token_usage_id(),
+            request_id=row["request_id"],
+            model_name=row["model_name"],
+            orchestration_type=row["orchestration_type"],
+            input_tokens=row["input_tokens"],
+            output_tokens=row["output_tokens"],
+            total_tokens=row["total_tokens"],
+            input_cost=row["input_cost"],
+            output_cost=row["output_cost"],
+            total_cost=row["total_cost"],
+            currency="USD",
+        )
+        usage.agent_ids = [TokenUsageAgentId(agent_id=a) for a in row["agent_ids"]]
+        db.add(usage)
+        inserted += 1
+    if inserted:
+        await db.flush()
     return inserted
 
 
-async def seed_workflow_runs() -> int:
-    db = get_database()
-    coll = db["workflow_runs"]
+async def seed_workflow_runs(db: AsyncSession) -> int:
     inserted = 0
     for row in _WORKFLOW_RUN_SEEDS:
-        if not await coll.find_one({"workflowId": row["workflowId"]}):
-            doc = dict(row)
-            doc["userId"] = "usr_adm_001"
-            doc["startedAt"] = _now_iso()
-            doc["finishedAt"] = None if doc["status"] == "running" else _now_iso()
-            await coll.insert_one(doc)
-            inserted += 1
+        if await db.get(WorkflowRun, row["workflowId"]) is not None:
+            continue
+        finished_at = None if row["status"] == "running" else datetime.now(timezone.utc)
+        db.add(
+            WorkflowRun(
+                workflow_id=row["workflowId"],
+                agent_id=row["agentId"],
+                user_id="usr_adm_001",
+                status=row["status"],
+                finished_at=finished_at,
+            )
+        )
+        inserted += 1
+    if inserted:
+        await db.flush()
     return inserted
 
 
-async def seed_metrics() -> int:
-    return await seed_token_usage() + await seed_workflow_runs()
+async def seed_metrics(db: AsyncSession) -> int:
+    return await seed_token_usage(db) + await seed_workflow_runs(db)

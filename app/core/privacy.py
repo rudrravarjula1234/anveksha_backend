@@ -48,11 +48,17 @@ def candidate_anon_id(name: str) -> str:
     return f"ANV-{digest}"
 
 
-def candidate_alias(candidate_id: str, index_hint: int = 0) -> str:
-    """Company-facing alias for a locked candidate."""
+def candidate_alias(candidate_id: str) -> str:
+    """Company-facing alias for a locked candidate.
+
+    Derived from the candidate id alone, so a candidate keeps the same
+    alias on every page, under every filter and in chat (a position-based
+    letter changed whenever the list did, and repeated after 26 rows).
+    """
     if candidate_id in CANDIDATE_ALIASES:
         return CANDIDATE_ALIASES[candidate_id]
-    return f"Candidate {chr(ord('A') + (index_hint % 26))}"
+    digest = hashlib.sha256(candidate_id.encode("utf-8")).hexdigest()[:4].upper()
+    return f"Candidate {digest}"
 
 
 def mask_initials() -> str:

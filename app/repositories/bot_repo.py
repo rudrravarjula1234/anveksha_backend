@@ -1,9 +1,8 @@
-"""Repository for bot configurations."""
+"""Repository for bots (Postgres)."""
 
-from app.repositories.base import MongoRepository
-from app.schemas.bot import BotFull
+from app.models.bot import Bot
+from app.repositories.sql_base import SqlRepository
 
 
-class BotRepository(MongoRepository[BotFull]):
-    collection_name = "bots"
-    read_model = BotFull
+class BotRepository(SqlRepository[Bot]):
+    model = Bot

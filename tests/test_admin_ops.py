@@ -1,14 +1,8 @@
-import base64
-import json
 
 import pytest
 from httpx import AsyncClient
 
-
-def _hdr(sub: str, role: str) -> dict[str, str]:
-    raw = json.dumps({"sub": sub, "role": role, "iat": 1700000000000})
-    return {"Authorization": "Bearer dev_" + base64.b64encode(raw.encode()).decode()}
-
+from tests.helpers import hdr as _hdr
 
 CANDIDATE = ("usr_cand_001", "candidate")
 
@@ -73,13 +67,21 @@ async def test_analytics(client: AsyncClient, admin_headers: dict[str, str]):
 
 @pytest.mark.asyncio
 async def test_users_roles_update_persists(client: AsyncClient, admin_headers: dict[str, str]):
+    """Reads the real, merged `users` table (app/db/seed.py's SEED_USERS)
+    — the old separate `admin_users` fixture (different ids/emails than
+    the real seeded users) is gone, see the migration plan's Stage 3."""
     r = await client.get("/api/admin/users", headers=admin_headers)
     assert r.status_code == 200
+    # Ordered by created_at desc, id asc as a tiebreak (several seed
+    # users share a created_at date).
     assert [u["id"] for u in r.json()] == [
+        "usr_adm_rajesh",
+        "usr_cand_rajesh",
+        "usr_spec_001",
         "usr_cand_001",
         "usr_ver_001",
         "usr_co_001",
-        "usr_co_002",
+        "usr_hr_001",
         "usr_adm_001",
     ]
 
@@ -137,8 +139,11 @@ async def test_bots_simple_list_and_create(client: AsyncClient):
     assert r.status_code == 200
     bots = r.json()
     assert len(bots) == 6
-    assert bots[0]["id"] == "BOT-001"
-    assert bots[0]["name"] == "Bob"
+    # Newest-created first (Postgres `bots` table order, shared with the
+    # rich /api/admin/bots view) — not seed-list order like the old
+    # Mongo `bots_simple` collection's unsorted find().
+    assert bots[0]["id"] == "BOT-006"
+    assert bots[0]["name"] == "Sam"
 
     r = await client.post(
         "/api/bots",

@@ -4,9 +4,9 @@ Run as a SEPARATE process (docker service `temporal-worker`):
 
     python -m app.temporal.worker_main
 
-Requires the `temporalio` extra. Connects Mongo (so activities can read
-seed/agent data), then runs a Worker on the configured task queue with
-the AgentTaskWorkflow + all activities registered.
+Requires the `temporalio` extra. Connects to Postgres (so activities can
+read seed/agent data), then runs a Worker on the configured task queue
+with the AgentTaskWorkflow + all activities registered.
 """
 
 import asyncio
@@ -29,14 +29,14 @@ async def main() -> None:
             "Install with: pip install '.[agents,temporal]'"
         )
 
-    from app.db.mongo import connect_to_mongo
+    from app.db.session import connect_to_db
     from app.temporal.activities import ALL_ACTIVITIES
     from app.temporal.client import get_temporal_client
     from app.temporal.compat import Worker
     from app.temporal.workflows import ALL_WORKFLOWS
 
-    await connect_to_mongo()
-    log.info("Worker: Mongo connected")
+    await connect_to_db()
+    log.info("Worker: Postgres connected")
 
     client = await get_temporal_client()
     worker = Worker(  # type: ignore[operator]

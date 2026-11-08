@@ -2,8 +2,8 @@ import pytest
 from httpx import AsyncClient
 
 
-async def _create_model(client: AsyncClient, admin_headers: dict[str, str]) -> str:
-    r = await client.post(
+async def _create_model(pg_client: AsyncClient, admin_headers: dict[str, str]) -> str:
+    r = await pg_client.post(
         "/api/admin/models",
         json={
             "name": "GPT-4o",
@@ -17,23 +17,30 @@ async def _create_model(client: AsyncClient, admin_headers: dict[str, str]) -> s
 
 
 @pytest.mark.asyncio
-async def test_requires_admin(client: AsyncClient):
-    r = await client.get("/api/admin/bots")
+async def test_requires_admin(pg_client: AsyncClient):
+    r = await pg_client.get("/api/admin/bots")
     assert r.status_code == 401
 
 
 @pytest.mark.asyncio
-async def test_empty_list(client: AsyncClient, admin_headers: dict[str, str]):
-    r = await client.get("/api/admin/bots", headers=admin_headers)
+async def test_empty_list(pg_client: AsyncClient, admin_headers: dict[str, str]):
+    """`bots` is a merged table (see the migration plan's Stage 3) — the
+    rich /api/admin/bots view now also surfaces the 6 seeded "simple"
+    bots (created via /api/bots), each with a synthesized fullName/
+    avatar/color and an empty primaryModelId (they were never given a
+    real ai_models FK)."""
+    r = await pg_client.get("/api/admin/bots", headers=admin_headers)
     assert r.status_code == 200
-    assert r.json() == []
+    bots = r.json()
+    assert len(bots) == 6
+    assert all(b["primaryModelId"] == "" for b in bots)
 
 
 @pytest.mark.asyncio
 async def test_create_requires_existing_primary_model(
-    client: AsyncClient, admin_headers: dict[str, str]
+    pg_client: AsyncClient, admin_headers: dict[str, str]
 ):
-    r = await client.post(
+    r = await pg_client.post(
         "/api/admin/bots",
         json={
             "name": "Ghost",
@@ -49,8 +56,8 @@ async def test_create_requires_existing_primary_model(
 
 
 @pytest.mark.asyncio
-async def test_full_lifecycle(client: AsyncClient, admin_headers: dict[str, str]):
-    model_id = await _create_model(client, admin_headers)
+async def test_full_lifecycle(pg_client: AsyncClient, admin_headers: dict[str, str]):
+    model_id = await _create_model(pg_client, admin_headers)
 
     # Create
     create_body = {
@@ -61,7 +68,7 @@ async def test_full_lifecycle(client: AsyncClient, admin_headers: dict[str, str]
         "persona": "Direct, probing style.",
         "systemPrompt": "You are Bob…",
     }
-    r = await client.post("/api/admin/bots", json=create_body, headers=admin_headers)
+    r = await pg_client.post("/api/admin/bots", json=create_body, headers=admin_headers)
     assert r.status_code == 201, r.text
     bot = r.json()
     assert bot["id"].startswith("bot_")
@@ -73,12 +80,12 @@ async def test_full_lifecycle(client: AsyncClient, admin_headers: dict[str, str]
     bot_id = bot["id"]
 
     # List
-    r = await client.get("/api/admin/bots", headers=admin_headers)
+    r = await pg_client.get("/api/admin/bots", headers=admin_headers)
     assert r.status_code == 200
     assert any(b["id"] == bot_id for b in r.json())
 
     # Patch — rename + change specializations
-    r = await client.patch(
+    r = await pg_client.patch(
         f"/api/admin/bots/{bot_id}",
         json={"specializations": ["CQRS", "Resilience"]},
         headers=admin_headers,
@@ -87,32 +94,32 @@ async def test_full_lifecycle(client: AsyncClient, admin_headers: dict[str, str]
     assert r.json()["specializations"] == ["CQRS", "Resilience"]
 
     # Toggle draft → active
-    r = await client.post(f"/api/admin/bots/{bot_id}/toggle", headers=admin_headers)
+    r = await pg_client.post(f"/api/admin/bots/{bot_id}/toggle", headers=admin_headers)
     assert r.status_code == 200
     assert r.json()["status"] == "active"
 
     # Toggle active → inactive
-    r = await client.post(f"/api/admin/bots/{bot_id}/toggle", headers=admin_headers)
+    r = await pg_client.post(f"/api/admin/bots/{bot_id}/toggle", headers=admin_headers)
     assert r.status_code == 200
     assert r.json()["status"] == "inactive"
 
     # Delete
-    r = await client.delete(f"/api/admin/bots/{bot_id}", headers=admin_headers)
+    r = await pg_client.delete(f"/api/admin/bots/{bot_id}", headers=admin_headers)
     assert r.status_code == 204
 
 
 @pytest.mark.asyncio
 async def test_patch_rejects_invalid_model_reference(
-    client: AsyncClient, admin_headers: dict[str, str]
+    pg_client: AsyncClient, admin_headers: dict[str, str]
 ):
-    model_id = await _create_model(client, admin_headers)
-    r = await client.post(
+    model_id = await _create_model(pg_client, admin_headers)
+    r = await pg_client.post(
         "/api/admin/bots",
         json={"name": "Test", "primaryModelId": model_id},
         headers=admin_headers,
     )
     bot_id = r.json()["id"]
-    r = await client.patch(
+    r = await pg_client.patch(
         f"/api/admin/bots/{bot_id}",
         json={"primaryModelId": "mdl_bogus"},
         headers=admin_headers,

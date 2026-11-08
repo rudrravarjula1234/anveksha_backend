@@ -1,12 +1,6 @@
-"""Identifier generation.
-
-Uses ULIDs everywhere: 26-char Crockford-base32 strings that are
-lexicographically sortable by creation time. Convenient for Mongo
-because they monotonically increase, keeping the natural id index
-in append-only insertion order.
-
-We prefix each id with a short collection tag (`mdl_`, `bot_`) to make
-references self-describing in logs and the UI.
+"""Identifier generation. ULIDs (26-char, lexicographically sortable by
+creation time) prefixed with a short domain tag (`mdl_`, `bot_`, ...) so
+references are self-describing in logs and the UI.
 """
 
 from ulid import ULID
@@ -22,3 +16,7 @@ def model_id() -> str:
 
 def bot_id() -> str:
     return f"bot_{_new_ulid()}"
+
+
+def token_usage_id() -> str:
+    return f"tok_{_new_ulid()}"

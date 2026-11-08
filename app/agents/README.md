@@ -1,7 +1,7 @@
 # app/agents — Agentic Framework (ported)
 
 Port of the legacy `backend/lib/agent_service/` AutoGen 0.7.5 wrapper into the
-new FastAPI + Motor backend. The package structure (providers/, orchestrators/,
+FastAPI + PostgreSQL backend (async SQLAlchemy over psycopg). The package structure (providers/, orchestrators/,
 streaming/, token_usage/, mcp/, hitl/, utils/) and the orchestration logic are
 preserved; only the integration seams changed.
 
@@ -10,11 +10,11 @@ preserved; only the integration seams changed.
 | Legacy | Port |
 | --- | --- |
 | `from lib.agent_service.X import Y` | `from app.agents.X import Y` |
-| `db.session.mongodb.db` | `app.db.mongo.get_database()` |
+| `db.session.mongodb.db` | async SQLAlchemy sessions — `app.db.session.get_sessionmaker()`, or an injected `db: AsyncSession` (the `app.db.mongo` module no longer exists) |
 | `core.config.settings` / per-package `AgentServiceSettings` | `app.core.config.get_settings()` (new `CREDENTIAL_ENCRYPTION_KEY` setting) |
-| `services/model_config_service.py` reading `model_configs` | **`model_config_adapter.py`** reading the new `ai_models` (AdminModel) collection and converting to the legacy config dict (`model` -> `model_name`, `"Azure OpenAI"` -> `azure`, `"Google Vertex"` -> `google`, `"AWS Bedrock"` -> `bedrock`, `costPer1k*` -> per-million pricing, legacy defaults for temperature/max_tokens/top_p) |
-| `services/model_credential_service.py` | **`credentials.py`** — Fernet-encrypted keys in the `model_credentials` collection; key from `settings.CREDENTIAL_ENCRYPTION_KEY`, with a stable dev key derived from `JWT_SECRET` when unset in DEBUG |
-| `services/token_usage_service.py` | **`token_usage/store.py`** — same contracts, rows in the `token_usage` collection (plus a new `list_recent()` for the API) |
+| `services/model_config_service.py` reading `model_configs` | **`model_config_adapter.py`** reading the `ai_models` table (AdminModel) and converting to the legacy config dict (`model` -> `model_name`, `"Azure OpenAI"` -> `azure`, `"Google Vertex"` -> `google`, `"AWS Bedrock"` -> `bedrock`, `costPer1k*` -> per-million pricing, legacy defaults for temperature/max_tokens/top_p) |
+| `services/model_credential_service.py` | **`credentials.py`** — Fernet-encrypted keys in the `model_credentials` table; key from `settings.CREDENTIAL_ENCRYPTION_KEY`, with a stable dev key derived from `JWT_SECRET` when unset in DEBUG |
+| `services/token_usage_service.py` | **`token_usage/store.py`** — same contracts, rows in the `token_usage` table (plus a new `list_recent()` for the API) |
 | `schemas/interview_feedback_schemas.py`, `schemas/token_usage.py`, `lib/agent_service/schemas.py` | merged into **`schemas.py`** as Pydantic v2 models (`@validator` -> `@field_validator`, `min_items` -> `min_length`) |
 | Direct `autogen_*` imports at module top-level | **`autogen_compat.py`** — single guarded import site; the whole package imports cleanly without AutoGen and sets `AUTOGEN_AVAILABLE` |
 | Exceptions rooted at `Exception` | rooted at `app.core.exceptions.AppError` (same class names; global handler maps them to JSON; new `AgentFrameworkNotInstalledError` -> 503) |

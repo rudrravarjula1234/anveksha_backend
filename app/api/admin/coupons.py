@@ -5,8 +5,10 @@ delete by code.
 """
 
 from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.deps import require_roles
+from app.db.session import get_session
 from app.schemas.assessment import Coupon, CouponCreate
 from app.services.assessment_service import CouponService
 
@@ -16,8 +18,8 @@ router = APIRouter(
 )
 
 
-def _service() -> CouponService:
-    return CouponService()
+def _service(db: AsyncSession = Depends(get_session)) -> CouponService:
+    return CouponService(db)
 
 
 @router.get("", response_model=list[Coupon])

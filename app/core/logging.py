@@ -45,4 +45,3 @@ def setup_logging(level: str = "info") -> None:
     logging.getLogger("uvicorn.access").handlers.clear()  # we emit our own
     logging.getLogger("uvicorn.access").propagate = False
     logging.getLogger("watchfiles").setLevel(logging.WARNING)
-    logging.getLogger("pymongo").setLevel(logging.WARNING)

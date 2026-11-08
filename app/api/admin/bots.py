@@ -7,8 +7,10 @@ the service layer enforces that.
 """
 
 from fastapi import APIRouter, Depends, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.deps import require_roles
+from app.db.session import get_session
 from app.schemas.bot import BotFull, BotFullCreate, BotFullUpdate
 from app.services.bot_service import BotService
 
@@ -18,8 +20,8 @@ router = APIRouter(
 )
 
 
-def _service() -> BotService:
-    return BotService()
+def _service(db: AsyncSession = Depends(get_session)) -> BotService:
+    return BotService(db)
 
 
 @router.get("", response_model=list[BotFull])

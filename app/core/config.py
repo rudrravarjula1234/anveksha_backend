@@ -7,9 +7,8 @@ documentation in one place.
 
 from functools import lru_cache
 from typing import Optional
-from urllib.parse import quote_plus
 
-from pydantic import AliasChoices, Field, computed_field
+from pydantic import Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -35,31 +34,34 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = Field(default="Anveksha")
     VERSION: str = Field(default="0.1.0")
 
-    # ─── Mongo ───────────────────────────────────────────────────────────
-    # Each field accepts both the historical MONGO_* env name and the
-    # deployment's MONGODB_* schema (MONGODB_URI / MONGODB_USERNAME /
-    # MONGODB_PASSWORD / MONGODB_DB_NAME). A full URI (cloud Atlas srv string)
-    # takes precedence over the component parts.
-    MONGO_URI: Optional[str] = Field(
+    # ─── Database (Supabase Postgres) ───────────────────────────────────────
+    # DATABASE_URL: pooled (Supavisor transaction mode, port 6543) — runtime traffic.
+    # DATABASE_MIGRATION_URL: direct (port 5432) — Alembic DDL only.
+    # Optional so the app/test-suite can boot unconfigured; connect_to_db()
+    # fails loudly on first query if DATABASE_URL is unset.
+    DATABASE_URL: Optional[str] = Field(
         default=None,
-        validation_alias=AliasChoices("MONGO_URI", "MONGODB_URI"),
-        description="Full URI overrides component parts.",
+        description="Pooled Supavisor (transaction mode, port 6543) connection URL.",
     )
-    MONGO_USERNAME: str = Field(
-        default="anveksha",
-        validation_alias=AliasChoices("MONGO_USERNAME", "MONGODB_USERNAME"),
+    DATABASE_MIGRATION_URL: Optional[str] = Field(
+        default=None,
+        description="Direct (port 5432) connection URL, used only by Alembic.",
     )
-    MONGO_PASSWORD: str = Field(
-        default="changeme",
-        validation_alias=AliasChoices("MONGO_PASSWORD", "MONGODB_PASSWORD"),
+    DATABASE_ECHO: bool = Field(
+        default=False, description="Log every SQL statement (SQLAlchemy `echo=`). Dev only."
     )
-    MONGO_DATABASE: str = Field(
-        default="anveksha",
-        validation_alias=AliasChoices("MONGO_DATABASE", "MONGODB_DB_NAME", "MONGODB_DATABASE"),
+    TEST_DATABASE_URL: str = Field(
+        default="postgresql+psycopg://anveksha_test:anveksha_test@localhost:55432/anveksha_test",
+        description="Local Postgres used by the test suite, never the real Supabase project.",
     )
-    MONGO_HOST: str = Field(default="mongo")
-    MONGO_PORT: int = Field(default=27017)
-    MONGO_AUTH_SOURCE: str = Field(default="admin")
+    # Per-instance connection pool against Supavisor. Kept small and
+    # multiplied by however many app instances run — the shared budget is
+    # Supavisor's, not a single process's. See app/db/session.py.
+    DATABASE_POOL_SIZE: int = Field(default=10, description="Persistent connections held per app instance.")
+    DATABASE_MAX_OVERFLOW: int = Field(default=10, description="Extra connections allowed above pool_size under burst load.")
+    DATABASE_POOL_RECYCLE_S: int = Field(
+        default=1800, description="Recycle pooled connections after this many seconds (avoids stale/killed ones)."
+    )
 
     # ─── CORS ────────────────────────────────────────────────────────────
     CORS_ORIGINS: str = Field(default="http://localhost:5173")
@@ -102,24 +104,6 @@ class Settings(BaseSettings):
     )
 
     # ── Derived values ────────────────────────────────────────────────────
-
-    @computed_field  # type: ignore[prop-decorator]
-    @property
-    def mongo_connection_uri(self) -> str:
-        """Resolve the Mongo URI we'll actually connect with.
-
-        Precedence: explicit MONGO_URI > component-built URI.
-        Component path URL-encodes credentials so passwords with `@`, `:`,
-        `/`, `?`, `#` etc. don't corrupt the connection string.
-        """
-        if self.MONGO_URI:
-            return self.MONGO_URI
-        user = quote_plus(self.MONGO_USERNAME)
-        pw = quote_plus(self.MONGO_PASSWORD)
-        return (
-            f"mongodb://{user}:{pw}@{self.MONGO_HOST}:{self.MONGO_PORT}/"
-            f"{self.MONGO_DATABASE}?authSource={self.MONGO_AUTH_SOURCE}"
-        )
 
     @computed_field  # type: ignore[prop-decorator]
     @property
