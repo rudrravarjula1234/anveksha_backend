@@ -1,6 +1,9 @@
-"""HTTP layer for `/api/catalog` — candidate-facing assessment catalog.
+"""HTTP layer for `/api/catalog` — public assessment catalog.
 
-Published assessments only. Any authenticated user can browse.
+Published assessments + active coupons only — public marketing/browse data,
+so these endpoints are open (no auth). Anyone can browse the catalog; sign-in
+is only required to actually start/book an assessment (enforced client-side
+by redirecting to login, and server-side by the booking/schedule endpoints).
 
     GET /api/catalog          — slim catalog rows
     GET /api/catalog/full     — full assessment objects (published)
@@ -10,15 +13,11 @@ Published assessments only. Any authenticated user can browse.
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.deps import get_current_principal
 from app.db.session import get_session
 from app.schemas.assessment import AssessmentFull, CatalogAssessment, CouponCode
 from app.services.assessment_service import AssessmentService, CouponService
 
-router = APIRouter(
-    tags=["Catalog"],
-    dependencies=[Depends(get_current_principal)],
-)
+router = APIRouter(tags=["Catalog"])
 
 
 def _assessments(db: AsyncSession = Depends(get_session)) -> AssessmentService:

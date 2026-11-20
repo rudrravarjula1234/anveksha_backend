@@ -1,2 +1,6 @@
 F:\Anveksha\anveksha_backend\run_dev.py:1: SyntaxWarning: invalid escape sequence '\.'
   """Windows-safe dev launcher for the backend.
+INFO:     Started server process [29760]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)

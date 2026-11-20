@@ -30,6 +30,7 @@ from app.schemas.company import (
     FollowupRequest,
     FollowupSkillOption,
     FollowupTracking,
+    GrayDemandItem,
     PipelineBoard,
     PipelineMove,
     SearchRequest,
@@ -178,6 +179,18 @@ async def unlock_candidate(
     return await service.unlock_candidate(candidate_id)
 
 
+@router.get("/companies/candidates/{candidate_id}/gray-demand", response_model=list[GrayDemandItem])
+async def gray_demand(
+    candidate_id: str,
+    service: CompanyService = Depends(_service),
+) -> list[GrayDemandItem]:
+    """The candidate's real never-tested areas ranked by company demand —
+    drives the dossier page's gray-demand panel (grows as the chat probes
+    those areas)."""
+    rows = await service.gray_demand(candidate_id)
+    return [GrayDemandItem(name=g["name"], companies=int(g.get("companies") or 0)) for g in rows]
+
+
 @router.get("/companies/pipeline", response_model=PipelineBoard)
 async def pipeline(service: CompanyService = Depends(_service)) -> PipelineBoard:
     return await service.pipeline()
@@ -221,21 +234,27 @@ async def chat(
     from app.services.agent_registry_service import AgentRegistryService  # noqa: PLC0415
 
     locked = not (body.candidateId and await service.is_unlocked(body.candidateId))
+    if locked:
+        ref = candidate_alias(body.candidateId)
+    else:
+        # Address an unlocked candidate by their real name, not their id.
+        ref = await service.candidate_display_name(body.candidateId) or body.candidateId
+
+    # Context is built from the candidate's REAL rows (transcript turns,
+    # published report, gray-area demand) — see CompanyService.build_chat_context.
+    context = await service.build_chat_context(
+        body.candidateId, body.prompt, locked=locked, ref=ref
+    )
+    # A question that targets a known gray area bumps its demand counter so
+    # the dossier's gray panel reflects the fresh signal on reload.
+    await service.note_gray_interest(body.candidateId, body.prompt)
 
     registry = AgentRegistryService(db)
-    result = await registry.run_agent(
-        "candidate_chat",
-        {
-            "task": "Answer the company's question about this candidate from session evidence only.",
-            "candidateRef": candidate_alias(body.candidateId) if locked else body.candidateId,
-            "locked": locked,
-            "question": body.prompt,
-        },
-    )
+    result = await registry.run_agent("candidate_chat", context)
     answer = result.output
     if locked:
         # Belt-and-braces: scrub the seeded candidate's name from canned text.
-        answer = answer.replace("Aarav", candidate_alias(body.candidateId)).replace("’s’", "'s")
+        answer = answer.replace("Aarav", ref).replace("’s’", "'s")
 
     # Perf (H4): the typing cadence used to sleep 40 ms per 24-char chunk
     # unconditionally — every answer paid ~40 ms × ceil(len/24) of pure

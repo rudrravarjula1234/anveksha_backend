@@ -97,16 +97,82 @@ async def _search_fallback(context: dict[str, Any], db: AsyncSession) -> str:  #
     )
 
 
+def _significant(text: str) -> set[str]:
+    import re
+
+    return {w for w in re.findall(r"[a-z0-9.#+]+", text.lower()) if len(w) >= 4}
+
+
+def _best_turn(question: str, turns: list[dict[str, Any]]) -> dict[str, Any]:
+    """The candidate transcript turn with the most keyword overlap with the
+    question (so the quoted evidence actually answers it); the first
+    substantive turn when nothing overlaps."""
+    qwords = _significant(question)
+    best, best_score = turns[0], -1
+    for turn in turns:
+        score = len(qwords & _significant(str(turn.get("text", ""))))
+        if score > best_score:
+            best, best_score = turn, score
+    return best
+
+
 async def _chat_fallback(context: dict[str, Any], db: AsyncSession) -> str:  # noqa: ARG001
-    prompt = str(context.get("question", "")).lower()
+    """Grounded in the candidate's REAL rows when the API layer supplied them
+    (transcript turns to quote + the published report's verdict + gray-area
+    demand). Degrades to the legacy canned keyword answers only when there is
+    no real evidence on record for this candidate (e.g. a pool-only row)."""
+    prompt = str(context.get("question", ""))
+    low = prompt.lower()
     ref = context.get("candidateRef", "the candidate")
-    if "payment" in prompt or "idempotenc" in prompt:
+    transcript = context.get("transcript") or {}
+    report = context.get("report") or {}
+    grays = context.get("grayAreas") or []
+
+    # 1) The question targets a never-tested (gray) area → say so, with the
+    #    real company-demand signal and a follow-up offer.
+    for g in sorted(grays, key=lambda x: -int(x.get("companies") or 0)):
+        name = str(g.get("name", ""))
+        words = [w for w in _significant(name) if len(w) >= 3]
+        if name and any(w in low for w in words):
+            companies = int(g.get("companies") or 0)
+            demand = f" {companies} other compan{'y has' if companies == 1 else 'ies have'} asked about it." if companies else ""
+            return (
+                f"I cannot answer this from existing evidence — {ref} has not been "
+                f"verified on {name}.{demand} You can trigger a targeted 30-minute "
+                "follow-up session focused exactly on this."
+            )
+
+    # 2) Quote the real transcript turn that best answers the question.
+    turns = transcript.get("candidateTurns") or []
+    if turns:
+        turn = _best_turn(prompt, turns)
+        skill = transcript.get("skill") or report.get("skill") or "this skill"
+        verdict = report.get("verdict")
+        quoted = str(turn.get("text", "")).rstrip(".")
+        tail = f" Verifier verdict: {verdict}" if verdict else ""
+        return (
+            f"From {ref}'s verified {skill} session (transcript {turn.get('t', '')}), "
+            f"they said: “{quoted}.”{tail}"
+        )
+
+    # 3) No transcript, but a published report exists → summarise it.
+    if report:
+        strengths = ", ".join(report.get("strengths") or []) or "—"
+        return (
+            f"{ref} was assessed on {report.get('skill')} and scored "
+            f"{report.get('score')}/100. Verdict: {report.get('verdict')} "
+            f"Verified strengths: {strengths}."
+        )
+
+    # 4) No real evidence on record — legacy canned answers (keeps the
+    #    pool-only candidates and the existing contract tests functional).
+    if "payment" in low or "idempotenc" in low:
         return (
             f"I cannot answer this from existing evidence. {ref} has not been "
             "verified on payment-domain specifics. You can trigger a targeted "
             "30-minute follow-up session focused exactly on this."
         )
-    if "system design" in prompt or "staff" in prompt:
+    if "system design" in low or "staff" in low:
         return (
             f"{ref} was verified Advanced on System Design (82/100) in the Feb 02 "
             "session. Strongest signals: tradeoff reasoning and operational realism."

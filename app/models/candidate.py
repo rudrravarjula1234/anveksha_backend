@@ -67,6 +67,19 @@ class SkillReportDetail(Base, TimestampMixin):
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     skill_id: Mapped[str] = mapped_column(String(40), nullable=False)
     assessment_title: Mapped[str] = mapped_column(String(200), nullable=False)
+    # Traceability FKs (nullable — legacy seeded reports predate these). The
+    # transcript this report was generated from, the assessment it covers, and
+    # the verifier (users.id) who signed it off — alongside the flattened
+    # verifier_name/ext_id strings kept for the report's display payload.
+    transcript_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("assessment_transcripts.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    assessment_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("assessments.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    verifier_user_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     # ReportParty / ReportVerifier — 1:1, flattened.
     candidate_name: Mapped[str] = mapped_column(String(200), nullable=False)
     candidate_ext_id: Mapped[str] = mapped_column(String(40), nullable=False)

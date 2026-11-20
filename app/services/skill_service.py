@@ -12,6 +12,7 @@ from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import NotFoundError
 from app.core.timefmt import to_wire, to_wire_opt
 from app.models.skill import SkillLedger as SkillLedgerModel
 from app.schemas.skill import (
@@ -105,12 +106,9 @@ class SkillService:
         self.db = db
 
     async def ledger_for_user(self, user_id: Optional[str]) -> SkillLedger:
-        row = None
-        if user_id:
-            row = await self.db.get(SkillLedgerModel, user_id)
+        # No cross-user fallback: a user without their own ledger must NOT be
+        # shown another user's (mock) ledger — return 404 instead.
+        row = await self.db.get(SkillLedgerModel, user_id) if user_id else None
         if row is None:
-            row = await self.db.get(SkillLedgerModel, _FALLBACK_CANDIDATE_ID)
-        if row is None:
-            # Seeds missing — fail loudly rather than fabricate an empty page.
-            raise RuntimeError("skill_ledgers seed data missing")
+            raise NotFoundError("No skill ledger yet")
         return ledger_to_schema(row)

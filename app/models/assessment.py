@@ -1,5 +1,6 @@
 """Assessments + coupons — storage layer."""
 
+from typing import Optional
 
 from sqlalchemy import (
     ARRAY,
@@ -32,6 +33,11 @@ class Assessment(Base, TimestampMixin):
     id: Mapped[str] = mapped_column(String, primary_key=True)
     slug: Mapped[str] = mapped_column(String(120), nullable=False, unique=True, index=True)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
+    # Traceability: the admin (users.id) who created this assessment. Nullable
+    # because the catalog predates this column; backfilled for seeded rows.
+    created_by_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     domain: Mapped[str] = mapped_column(
         Enum(*_DOMAINS, name="assessment_domain", native_enum=False, create_constraint=True),
         nullable=False,

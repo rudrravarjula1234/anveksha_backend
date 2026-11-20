@@ -23,7 +23,10 @@ from app.api import agents as agents_api
 from app.api import (
     approvals,
     auth,
+    bot_definitions,
     candidate,
+    question_bank,
+    sessions_ingest,
     catalog,
     company,
     health,
@@ -152,6 +155,15 @@ def create_app() -> FastAPI:
     # companies, integrity, analytics, flags, rbac, pilots).
     app.include_router(admin_ops.router, prefix="/api/admin")
     app.include_router(admin_ops.bots_simple_router, prefix="/api/bots")
+    # Public (service) bot-definition read for the RAW bot-worker — see
+    # app/api/bot_definitions.py. Mounted after the simple router; its only
+    # path is /{bot_id}/definition, which doesn't collide with that router's "".
+    app.include_router(bot_definitions.router, prefix="/api/bots")
+    # Smart-interviewer next-probe (graph-RAG question bank) — service auth.
+    app.include_router(question_bank.router, prefix="/api/bots")
+    # Service-authed ingest of finished RAW assessment transcripts — see
+    # app/api/sessions_ingest.py (X-Service-Key, not a user token).
+    app.include_router(sessions_ingest.router, prefix="/api/sessions")
     # Platform dashboard — agent/bot/model/user counts, token usage, workflow stats.
     app.include_router(admin_metrics.router, prefix="/api/admin/metrics")
     # Agentic framework: status, credentials, token usage, feedback.

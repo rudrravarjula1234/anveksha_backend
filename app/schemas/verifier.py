@@ -94,9 +94,26 @@ class SuggestedGap(ReadModel):
     note: Optional[str] = None
 
 
+class TranscriptTurn(ReadModel):
+    t: str = ""
+    who: str = ""
+    text: str = ""
+    label: str = ""
+
+
 class ReportEnvelope(ReadModel):
     report: SessionReport
     suggestedGaps: list[SuggestedGap] = Field(default_factory=list)
+    # The real RAW session transcript this report was built from, so the SME
+    # reviews against the actual answers (empty for legacy seed reports with
+    # no ingested transcript). Joined by report.sessionId == transcript.id.
+    transcript: list[TranscriptTurn] = Field(default_factory=list)
+    # Bot-vs-SME divergence. `variance` = |avg(aiScore) − avg(verifierScore)|
+    # over the sections the SME has scored; null until the SME scores any.
+    # `varianceFlag` trips past the review threshold → publish runs a
+    # gap-analysis instead of a straight sign-off (Scene 3).
+    variance: Optional[float] = None
+    varianceFlag: bool = False
 
 
 class PendingReportListItem(ReadModel):

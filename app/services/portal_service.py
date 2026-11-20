@@ -239,6 +239,9 @@ class BookingService:
         self.db.add(
             MyInterviewModel(
                 id=booking_id, user_id=user_id, catalog_id=catalog.catalogId,
+                # catalog_id == assessment id for real assessments — set the
+                # hard FK too so the booking traces to its assessment.
+                assessment_id=catalog.catalogId,
                 title=catalog.skillName, status="scheduled", scheduled_date=scheduled_at,
             )
         )

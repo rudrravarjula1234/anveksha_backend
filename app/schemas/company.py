@@ -221,3 +221,11 @@ class FollowupRequest(AppModel):
 class ChatRequest(AppModel):
     candidateId: str
     prompt: str
+
+
+class GrayDemandItem(ReadModel):
+    """A candidate's never-tested area plus how many companies have asked
+    about it — the real data behind the dossier gray-demand panel."""
+
+    name: str
+    companies: int = 0

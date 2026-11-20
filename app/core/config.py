@@ -106,6 +106,14 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ─── Service-to-service auth ─────────────────────────────────────────
+    # Shared secret for trusted non-user callers (today: the RAW bot-worker
+    # POSTing a finished session's transcript to the ingest endpoint). Sent
+    # as the `X-Service-Key` header and compared constant-time. When unset,
+    # the service-key endpoints refuse all callers (503) rather than fall
+    # open — a missing secret must never mean "no auth".
+    SERVICE_API_KEY: Optional[str] = Field(default=None)
+
     # ── Derived values ────────────────────────────────────────────────────
 
     @computed_field  # type: ignore[prop-decorator]

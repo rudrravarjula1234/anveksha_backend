@@ -21,6 +21,7 @@ from app.core.timefmt import to_wire
 from app.models.candidate import SessionHistoryRow as SessionHistoryModel
 from app.models.candidate import SkillReport as SkillReportModel
 from app.models.candidate import SkillReportDetail as SkillReportDetailModel
+from app.models.session_ingest import AssessmentTranscript as AssessmentTranscriptModel
 from app.models.verifier import PendingReport as PendingReportModel
 from app.models.verifier import SessionReport as SessionReportModel
 from app.models.verifier import SuggestedGap as SuggestedGapModel
@@ -57,10 +58,34 @@ from app.schemas.verifier import (
     QualityMetric as QualityMetricSchema,
 )
 from app.schemas.verifier import (
+    TranscriptTurn as TranscriptTurnSchema,
+)
+from app.schemas.verifier import (
     RateCardRow as RateCardRowSchema,
 )
 
 _FALLBACK_REPORT_ID = "rpt_001"
+
+# Bot-vs-SME score gap (points, 0–100 scale) past which a report is flagged:
+# the human materially disagreed with the bot, so publishing runs a
+# gap-analysis pass instead of a straight sign-off (Scene 3).
+_VARIANCE_THRESHOLD = 15.0
+
+
+def _section_variance(sections: list[dict[str, Any]]) -> tuple[Optional[float], bool]:
+    """Divergence between the bot's and the SME's scores, averaged over the
+    sections the SME has actually scored. None until the SME scores any."""
+    pairs = [
+        (float(s["ai_score"]), float(s["verifier_score"]))
+        for s in sections
+        if s.get("verifier_score") is not None
+    ]
+    if not pairs:
+        return None, False
+    ai_avg = sum(p[0] for p in pairs) / len(pairs)
+    sme_avg = sum(p[1] for p in pairs) / len(pairs)
+    variance = round(abs(ai_avg - sme_avg), 1)
+    return variance, variance >= _VARIANCE_THRESHOLD
 
 
 def _to_session_schema(row: VerifierSessionModel, *, anonymize: bool = True) -> VerifierSession:
@@ -218,11 +243,32 @@ class VerifierService:
             row = await self.db.get(SessionReportModel, _FALLBACK_REPORT_ID)
         return row
 
+    async def _transcript_turns(self, session_id: str) -> list[TranscriptTurnSchema]:
+        """The real RAW transcript this report was built from (joined by the
+        shared session id). Empty for legacy seed reports with no ingest."""
+        row = await self.db.get(AssessmentTranscriptModel, session_id)
+        if row is None:
+            return []
+        return [
+            TranscriptTurnSchema(
+                t=str(line.get("t", "")), who=str(line.get("who", "")),
+                text=str(line.get("text", "")), label=str(line.get("label", "")),
+            )
+            for line in (row.transcript or [])
+        ]
+
     async def get_report(self, report_id: str) -> ReportEnvelope:
         row = await self._find_report(report_id)
         if row is None:
             raise NotFoundError(f"Report {report_id} not found")
-        return ReportEnvelope(report=_to_report_schema(row), suggestedGaps=await self._suggested_gaps())
+        variance, flag = _section_variance(row.sections or [])
+        return ReportEnvelope(
+            report=_to_report_schema(row),
+            suggestedGaps=await self._suggested_gaps(),
+            transcript=await self._transcript_turns(row.session_id),
+            variance=variance,
+            varianceFlag=flag,
+        )
 
     async def patch_report(self, report_id: str, patch: dict[str, Any]) -> dict[str, Any]:
         """Free-form per-section save. The mock echoes {ok, patched, report}."""
@@ -252,17 +298,70 @@ class VerifierService:
 
     async def publish_report(self, report_id: str) -> dict[str, Any]:
         row = await self.db.get(SessionReportModel, report_id)
-        if row is not None:
-            row.status = "published"
-            # Published reports leave the pending queue — same session,
-            # same request/transaction as the status flip above.
-            pending = await self.db.get(PendingReportModel, report_id)
-            if pending is not None:
-                await self.db.delete(pending)
-            if row.published_report_id:
-                await self._sync_published_report(row.published_report_id, row.overall_score)
-            await self.db.flush()
-        return {"ok": True, "status": "published"}
+        if row is None:
+            return {"ok": True, "status": "published"}
+
+        variance, flag = _section_variance(row.sections or [])
+        gap_analysis: Optional[str] = None
+        # Variance branch: the SME materially disagreed with the bot, so
+        # don't just sign off — run a gap-analysis over the real transcript
+        # and fold the findings into the report's gray areas (Scene 3).
+        if flag:
+            gap_analysis = await self._run_gap_analysis(row)
+            if gap_analysis:
+                bullets = [
+                    ln.strip().lstrip("-•* ").strip()
+                    for ln in gap_analysis.splitlines()
+                    if ln.strip()
+                ]
+                existing = list(row.gray_areas or [])
+                for b in bullets:
+                    if b and b not in existing:
+                        existing.append(b)
+                row.gray_areas = existing
+
+        row.status = "published"
+        # Published reports leave the pending queue — same session,
+        # same request/transaction as the status flip above.
+        pending = await self.db.get(PendingReportModel, report_id)
+        if pending is not None:
+            await self.db.delete(pending)
+        if row.published_report_id:
+            await self._sync_published_report(row.published_report_id, row.overall_score)
+        await self.db.flush()
+        return {
+            "ok": True,
+            "status": "published",
+            "variance": variance,
+            "varianceFlag": flag,
+            "gapAnalysis": gap_analysis,
+        }
+
+    async def _run_gap_analysis(self, report: SessionReportModel) -> Optional[str]:
+        """Gap-analysis over the real transcript + the bot/SME score split.
+        Degrades to None on any failure — a flagged publish still succeeds."""
+        try:
+            from app.services.agent_registry_service import AgentRegistryService
+
+            turns = await self.db.get(AssessmentTranscriptModel, report.session_id)
+            transcript = [
+                {"who": l.get("who"), "text": l.get("text")}
+                for l in ((turns.transcript if turns else []) or [])
+            ]
+            context = {
+                "task": "Identify the specific gap areas where the candidate's answers were weak or divergent, as concrete bullet points.",
+                "skill": report.skill,
+                "candidate": report.candidate_name,
+                "sections": [
+                    {"title": s["title"], "botScore": s["ai_score"], "verifierScore": s.get("verifier_score")}
+                    for s in (report.sections or [])
+                ],
+                "transcript": transcript,
+            }
+            result = await AgentRegistryService(self.db).run_agent("gap_analyzer", context)
+            return result.output
+        except Exception:  # noqa: BLE001 — gap-analysis is best-effort
+            return None
 
     async def _sync_published_report(self, detail_id: str, score: float) -> None:
         """Keep the candidate-facing report views' score in sync with a

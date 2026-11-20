@@ -129,6 +129,12 @@ class MyInterview(Base, TimestampMixin):
     # Owner — services return only the caller's rows.
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     catalog_id: Mapped[str] = mapped_column(String, nullable=False)  # soft ref — see module docstring
+    # Traceability: the assessment booked. For current rows catalog_id already
+    # equals the assessment id; this hard FK makes the link explicit and
+    # enforced. Nullable for legacy rows whose catalog_id has no assessment.
+    assessment_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("assessments.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     status: Mapped[str] = mapped_column(
         Enum(*_MY_INTERVIEW_STATUSES, name="my_interview_status", native_enum=False, create_constraint=True),

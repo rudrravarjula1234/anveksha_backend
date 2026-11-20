@@ -8,6 +8,7 @@ by loading and sorting the whole ledger on every read — see
 app/models/company.py's module docstring for why.
 """
 
+import re
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
@@ -19,6 +20,9 @@ from ulid import ULID
 from app.core.exceptions import AppError, NotFoundError, ValidationError
 from app.core.privacy import candidate_alias, mask_initials
 from app.core.timefmt import to_wire, utc_now
+from app.models.candidate import PublicProfile as PublicProfileModel
+from app.models.candidate import SkillReportDetail as SkillReportDetailModel
+from app.models.session_ingest import AssessmentTranscript as AssessmentTranscriptModel
 from app.models.company import AnonymousInterviewer as InterviewerModel
 from app.models.company import Billing as BillingModel
 from app.models.company import Company as CompanyModel
@@ -57,6 +61,34 @@ from app.schemas.company import (
 )
 
 _COMPANY_ID = "co_northstack"
+
+# Words with no discriminating value for skill/role matching — stripped
+# before a query is tokenised so "someone with strong kafka experience"
+# matches on "kafka", not on "someone"/"with"/"experience".
+_SEARCH_STOPWORDS = frozenset(
+    {
+        "someone", "with", "strong", "and", "the", "for", "who", "has", "have",
+        "handled", "about", "that", "this", "ideally", "comfortable", "reasoning",
+        "experience", "wild", "any", "people", "person", "candidate", "engineer",
+        "looking", "need", "needs", "want", "wants", "good", "great", "solid",
+        "deep", "scale", "production", "prod", "someone's", "their", "they",
+    }
+)
+
+
+def _tokenize(text: str) -> list[str]:
+    """Significant lowercased terms (skills keep '.', '#', '+' — '.net',
+    'c#', 'c++'). Short/stopword terms are dropped so a single stray letter
+    like the test's `query: "x"` yields no tokens (→ an unfiltered list)."""
+    words = re.findall(r"[a-z0-9.#+]+", text.lower())
+    return [w for w in words if len(w) >= 2 and w.strip(".#+") not in _SEARCH_STOPWORDS]
+
+
+def _keywords(name: str) -> list[str]:
+    """Discriminating words of a gray-area / skill name, for loose matching
+    of a free-text question against it (e.g. 'Kafka & Event Streams')."""
+    words = re.findall(r"[a-z0-9.#+]+", name.lower())
+    return [w for w in words if len(w) >= 3 and w.strip(".#+") not in _SEARCH_STOPWORDS]
 
 
 def _interviewer_to_schema(row: InterviewerModel) -> AnonymousInterviewer:
@@ -387,9 +419,30 @@ class CompanyService:
     # M2: bounded candidate reads. The `minScore` filter runs in SQL
     # (backed by ix_search_candidates_verification_score) BEFORE the cap,
     # so a match past the first SEARCH_CAP rows by id is still returned.
-    # `body.query` is echoed but not matched on: there is no text matching
-    # yet, which is a product decision rather than a storage one.
+    # `body.query` is now matched on (keyword overlap against each
+    # candidate's skills/role/name — see `_rank`): a non-trivial query keeps
+    # only the candidates it actually hits and ranks them by hit count.
     SEARCH_CAP = 500
+
+    @staticmethod
+    def _rank(query: str, rows: list[SearchCandidateModel]) -> list[SearchCandidateModel]:
+        """Keyword-match + rank candidates by a free-text query. An empty /
+        tokenless query (e.g. the test's `"x"`) returns every row unchanged;
+        otherwise only candidates matching ≥1 query term survive, ordered by
+        (#terms matched, verification score)."""
+        tokens = _tokenize(query)
+        if not tokens:
+            return list(rows)
+        scored: list[tuple[int, int, SearchCandidateModel]] = []
+        for row in rows:
+            haystack = " ".join(
+                [row.name, row.title, *(row.verified_skills or []), *(row.gray_skills or [])]
+            ).lower()
+            hits = sum(1 for t in set(tokens) if t in haystack)
+            if hits:
+                scored.append((hits, row.verification_score, row))
+        scored.sort(key=lambda s: (-s[0], -s[1], s[2].id))
+        return [row for _, _, row in scored]
 
     async def search(self, body: SearchRequest) -> SearchResponse:
         min_score = 0
@@ -398,10 +451,10 @@ class CompanyService:
         stmt = (
             select(SearchCandidateModel)
             .where(SearchCandidateModel.verification_score >= min_score)
-            .order_by(SearchCandidateModel.id)
+            .order_by(SearchCandidateModel.verification_score.desc(), SearchCandidateModel.id)
             .limit(self.SEARCH_CAP)
         )
-        rows = (await self.db.execute(stmt)).scalars().all()
+        rows = self._rank(body.query, (await self.db.execute(stmt)).scalars().all())
         unlocked = await self._unlocked_ids([r.id for r in rows])
         matches: list[CandidateMatch] = []
         for row in rows:
@@ -474,6 +527,113 @@ class CompanyService:
         )
         await self.db.flush()
         return {"ok": True, "requestId": request_id, "candidateId": candidate_id, "skills": skills, "message": message}
+
+    # ── Candidate deep-dive: real transcript/report grounding ───────────
+
+    async def _session_transcript(self, candidate_id: str) -> Optional[AssessmentTranscriptModel]:
+        """The candidate's most recent ingested interview transcript, by the
+        real `candidate_user_id` FK — the search-candidate id IS the user id
+        for the interviewed candidates (see seed_company_search_real.py)."""
+        stmt = (
+            select(AssessmentTranscriptModel)
+            .where(AssessmentTranscriptModel.candidate_user_id == candidate_id)
+            .order_by(AssessmentTranscriptModel.created_at.desc())
+            .limit(1)
+        )
+        return (await self.db.execute(stmt)).scalars().first()
+
+    async def candidate_display_name(self, candidate_id: Optional[str]) -> Optional[str]:
+        """The real (unmasked) name from the search pool, for addressing an
+        unlocked candidate in chat. None when the id isn't in the pool."""
+        if not candidate_id:
+            return None
+        row = await self.db.get(SearchCandidateModel, candidate_id)
+        return row.name if row else None
+
+    async def _reports(self, candidate_id: str) -> list[SkillReportDetailModel]:
+        stmt = select(SkillReportDetailModel).where(SkillReportDetailModel.user_id == candidate_id)
+        return list((await self.db.execute(stmt)).scalars().all())
+
+    async def build_chat_context(
+        self, candidate_id: Optional[str], question: str, *, locked: bool, ref: str
+    ) -> dict[str, Any]:
+        """Assemble the LLM/fallback context from the candidate's REAL rows:
+        their ingested transcript (candidate turns to quote), published skill
+        reports (verdict/score/strengths/gray), and public-profile gray areas
+        with company demand. Nothing here is canned — it all traces to a row."""
+        ctx: dict[str, Any] = {
+            "task": "Answer the company's question about this candidate from session evidence only.",
+            "candidateRef": ref,
+            "locked": locked,
+            "question": question,
+        }
+        if not candidate_id:
+            return ctx
+
+        transcript = await self._session_transcript(candidate_id)
+        reports = await self._reports(candidate_id)
+        # The report generated from THIS transcript (if any) carries the
+        # session-specific verdict; otherwise fall back to the first report.
+        session_report = next(
+            (r for r in reports if transcript and r.transcript_id == transcript.id),
+            reports[0] if reports else None,
+        )
+
+        if transcript:
+            turns = [
+                {"t": ln.get("t", ""), "text": ln.get("text", "")}
+                for ln in (transcript.transcript or [])
+                if ln.get("who") == "candidate" and ln.get("text")
+            ]
+            ctx["transcript"] = {
+                "id": transcript.id,
+                "skill": session_report.assessment_title if session_report else None,
+                "candidateTurns": turns,
+            }
+        if session_report:
+            ctx["report"] = {
+                "id": session_report.id,
+                "skill": session_report.assessment_title,
+                "score": session_report.score,
+                "verdict": session_report.verdict,
+                "strengths": list(session_report.summary or []),
+                "gray": list(session_report.gray or []),
+            }
+
+        profile = await self.db.get(PublicProfileModel, candidate_id)
+        if profile and profile.gray_areas:
+            ctx["grayAreas"] = [dict(g) for g in profile.gray_areas]
+        return ctx
+
+    async def gray_demand(self, candidate_id: str) -> list[dict[str, Any]]:
+        """The candidate's gray areas ranked by how many companies have asked
+        — the real signal behind the dossier page's gray-demand panel."""
+        profile = await self.db.get(PublicProfileModel, candidate_id)
+        grays = [dict(g) for g in (profile.gray_areas if profile else [])]
+        return sorted(grays, key=lambda g: -int(g.get("companies") or 0))
+
+    async def note_gray_interest(self, candidate_id: Optional[str], question: str) -> Optional[str]:
+        """When a chat question targets a known gray area, bump that area's
+        company-demand counter (a real write to public_profiles) so the side
+        panel reflects the fresh demand on reload. Returns the matched area."""
+        if not candidate_id:
+            return None
+        profile = await self.db.get(PublicProfileModel, candidate_id)
+        if profile is None or not profile.gray_areas:
+            return None
+        q = question.lower()
+        grays = [dict(g) for g in profile.gray_areas]
+        matched: Optional[str] = None
+        for g in grays:
+            name = str(g.get("name", ""))
+            if name and any(w in q for w in _keywords(name)):
+                g["companies"] = int(g.get("companies") or 0) + 1
+                matched = name
+                break
+        if matched:
+            profile.gray_areas = grays  # reassign so SQLAlchemy sees the change
+            await self.db.flush()
+        return matched
 
     # ── AI chat (canned, streamed by the API layer) ─────────────────────
 

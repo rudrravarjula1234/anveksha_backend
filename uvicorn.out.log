@@ -1,0 +1,15 @@
+F:\Anveksha\anveksha_backend\run_dev.py:1: SyntaxWarning: invalid escape sequence '\.'
+  """Windows-safe dev launcher for the backend.
+INFO:     Started server process [32396]
+INFO:     Waiting for application startup.
+2026-11-20 21:49:52,459 INFO    [-] app.main — Starting Anveksha v0.1.0 (DEBUG=True)
+2026-11-20 21:49:52,459 INFO    [-] app.db.session — Configuring Supabase Postgres engine (pool_size=10, max_overflow=10).
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2026-11-20 21:49:54,023 INFO    [bcb8178e2434] anveksha.access — GET /health 200 342.3ms
+2026-11-20 21:49:59,826 INFO    [9be599a52462] anveksha.access — GET /health 200 53.1ms
+2026-11-20 21:50:00,287 INFO    [286708ac2a68] anveksha.access — POST /api/auth/dev-login 200 185.0ms
+2026-11-20 21:50:00,696 INFO    [42c5ec93c209] anveksha.access — GET /api/interviews/my-interviews 200 123.0ms
+2026-11-20 21:59:02,114 INFO    [b31343e2d43b] anveksha.access — GET /health 200 55.5ms
+2026-11-20 22:06:18,263 INFO    [decfc336ac23] anveksha.access — POST /api/sessions/test_scene3_1795192577/transcript 201 154.6ms
+2026-11-20 22:07:24,898 INFO    [cc34e4aee213] anveksha.access — POST /api/sessions/test_scene3_b_1795192644/transcript 201 73.0ms

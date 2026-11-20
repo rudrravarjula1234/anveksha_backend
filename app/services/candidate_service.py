@@ -192,11 +192,11 @@ class CandidateService:
         return [OnboardingStep(id=r.id, title=r.title, body=r.body, done=r.done) for r in rows]
 
     async def public_profile(self, user_id: Optional[str]) -> PublicProfileData:
-        row = await self.db.get(PublicProfileModel, self._uid(user_id))
+        # No cross-user fallback: a user without their own public profile must
+        # NOT be shown another user's (mock) data — return 404 instead.
+        row = await self.db.get(PublicProfileModel, user_id) if user_id else None
         if row is None:
-            row = await self.db.get(PublicProfileModel, _FALLBACK_USER)
-        if row is None:
-            raise RuntimeError("public_profiles seed data missing")
+            raise NotFoundError("No public profile yet")
         return _profile_to_schema(row)
 
     async def session_history(self, user_id: Optional[str]) -> list[SessionHistoryRow]:
@@ -235,11 +235,11 @@ class CandidateService:
     async def profile_me(self, user_id: Optional[str]) -> UserProfileMe:
         """Derived from the user's skill ledger, mirroring the mock's
         on-the-fly construction."""
-        ledger = await self.db.get(
-            SkillLedgerModel, user_id or _FALLBACK_USER
-        ) or await self.db.get(SkillLedgerModel, _FALLBACK_USER)
+        # No cross-user fallback: a user without their own ledger must NOT be
+        # shown another user's (mock) profile — return 404 instead.
+        ledger = await self.db.get(SkillLedgerModel, user_id) if user_id else None
         if ledger is None:
-            raise RuntimeError("skill_ledgers seed data missing")
+            raise NotFoundError("No profile yet — complete onboarding first")
         skills = ledger.skills
         return UserProfileMe(
             id="prof_001",

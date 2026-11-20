@@ -61,6 +61,8 @@ from app.models.company import (  # noqa: F401
     TeamMember,
 )
 from app.models.credentials import ModelCredential  # noqa: F401
+from app.models.session_ingest import AssessmentTranscript  # noqa: F401
+from app.models.question_bank import InterviewQuestion, QuestionEdge  # noqa: F401
 from app.models.portal import (  # noqa: F401
     BookingCatalog,
     Dossier,
