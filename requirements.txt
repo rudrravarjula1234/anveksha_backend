@@ -15,6 +15,7 @@ sqlalchemy[asyncio]>=2.0.30
 psycopg[binary,pool]>=3.2.0  # async Postgres driver — see app/db/session.py
 alembic>=1.13.0
 greenlet>=3.0.0  # required by SQLAlchemy's asyncio extension
+pgvector>=0.3.0  # vector column support for question_bank.py
 
 # ── Agentic framework (app/agents) ──────────────────────────────────────────
 # Required: without it every AI agent silently answers from its template
