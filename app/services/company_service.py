@@ -91,6 +91,57 @@ def _keywords(name: str) -> list[str]:
     return [w for w in words if len(w) >= 3 and w.strip(".#+") not in _SEARCH_STOPWORDS]
 
 
+# Canonical labels for common tech topics, so a company's free-text question
+# about an untested area ("GCP experience?") surfaces as a cleanly-named new
+# gray area instead of a raw lowercase word. Longest keys first so
+# "google cloud" wins over a stray "go".
+_TOPIC_VOCAB: dict[str, str] = {
+    "google cloud": "Google Cloud Platform", "gcp": "Google Cloud Platform",
+    "amazon web services": "AWS", "aws": "AWS", "azure": "Microsoft Azure",
+    "kubernetes": "Kubernetes", "k8s": "Kubernetes", "docker": "Docker",
+    "terraform": "Terraform", "graphql": "GraphQL", "grpc": "gRPC",
+    "elasticsearch": "Elasticsearch", "rabbitmq": "RabbitMQ", "redis": "Redis",
+    "apache spark": "Apache Spark", "spark": "Apache Spark", "airflow": "Apache Airflow",
+    "mongodb": "MongoDB", "postgresql": "PostgreSQL", "postgres": "PostgreSQL",
+    "machine learning": "Machine Learning", "observability": "Observability",
+    "ci/cd": "CI/CD", "security": "Security", "typescript": "TypeScript",
+    "react": "React", "rust": "Rust", "golang": "Go",
+}
+
+# Generic skill words that overlap too many topics to prove "already covered"
+# on their own — excluded from the verified-skill guard in note_gray_interest.
+_GENERIC_SKILL_WORDS = {
+    "cloud", "data", "system", "systems", "design", "architecture",
+    "engineering", "development", "management", "services", "service",
+    "platform", "core", "web", "app", "application", "backend", "frontend",
+}
+
+# Sentence-filler words that must never be mistaken for a topic in the
+# capitalized-token fallback below.
+_TOPIC_STOPWORDS = {
+    "how", "what", "does", "is", "would", "can", "could", "he", "his", "him",
+    "any", "the", "a", "an", "on", "in", "for", "of", "to", "do", "did", "has",
+    "have", "strong", "deep", "about", "with", "and", "or", "experience",
+}
+
+
+def _extract_topic(question: str) -> Optional[str]:
+    """Name the subject of a company's question so an unverified, not-yet-gray
+    topic can become a freshly-discovered gray area. Prefers a known tech term
+    (``_TOPIC_VOCAB``); falls back to an acronym / capitalized word in the raw
+    question. Returns None when nothing specific enough is found."""
+    q = question.lower()
+    for key, canon in _TOPIC_VOCAB.items():
+        if key in q:
+            return canon
+    for tok in re.findall(r"[A-Za-z][A-Za-z0-9.+#/]{1,}", question):
+        if tok.isupper() and len(tok) >= 2 and tok.lower() not in _TOPIC_STOPWORDS:
+            return tok  # an acronym like GCP, SRE, ETL
+        if tok[:1].isupper() and tok.lower() not in _TOPIC_STOPWORDS and len(tok) >= 3:
+            return tok  # a proper-noun-ish term like Snowflake, Kubernetes
+    return None
+
+
 def _interviewer_to_schema(row: InterviewerModel) -> AnonymousInterviewer:
     return AnonymousInterviewer(
         id=row.id, displayName=row.display_name, title=row.title, email=row.email,
@@ -613,27 +664,62 @@ class CompanyService:
         return sorted(grays, key=lambda g: -int(g.get("companies") or 0))
 
     async def note_gray_interest(self, candidate_id: Optional[str], question: str) -> Optional[str]:
-        """When a chat question targets a known gray area, bump that area's
-        company-demand counter (a real write to public_profiles) so the side
-        panel reflects the fresh demand on reload. Returns the matched area."""
+        """Register company demand for an unverified area, writing it back to
+        public_profiles so the dossier's gray-demand panel grows on reload.
+
+        Two cases, both real writes:
+          1. The question targets a KNOWN gray area → bump its counter.
+          2. The question targets something neither verified nor already-gray
+             (e.g. "GCP experience?") → *discover* it as a brand-new gray area
+             (companies: 1). This is what makes company questions surface gaps
+             the dossier never listed. A question about an already-VERIFIED
+             skill is covered, not a gap, so it creates nothing.
+        Returns the area's name, or None if the question named nothing specific."""
         if not candidate_id:
             return None
         profile = await self.db.get(PublicProfileModel, candidate_id)
-        if profile is None or not profile.gray_areas:
+        if profile is None:
             return None
         q = question.lower()
-        grays = [dict(g) for g in profile.gray_areas]
-        matched: Optional[str] = None
+        grays = [dict(g) for g in (profile.gray_areas or [])]
+
+        # Case 1 — a known gray area matches: bump it.
         for g in grays:
             name = str(g.get("name", ""))
             if name and any(w in q for w in _keywords(name)):
                 g["companies"] = int(g.get("companies") or 0) + 1
-                matched = name
-                break
-        if matched:
-            profile.gray_areas = grays  # reassign so SQLAlchemy sees the change
-            await self.db.flush()
-        return matched
+                profile.gray_areas = grays  # reassign so SQLAlchemy sees the change
+                await self.db.flush()
+                return name
+
+        # A question about an already-verified skill is covered, not a gap.
+        # Match only on a skill's *distinctive* words — generic ones like
+        # "cloud"/"data"/"system" overlap too many topics (e.g. a "GCP"
+        # question would wrongly count as covered by ".NET & Cloud
+        # Architecture" on the shared word "cloud").
+        sc = await self.db.get(SearchCandidateModel, candidate_id)
+        verified = list(sc.verified_skills) if sc and sc.verified_skills else []
+        if any(
+            any(w in q for w in _keywords(v) if w not in _GENERIC_SKILL_WORDS)
+            for v in verified
+        ):
+            return None
+
+        # Case 2 — discover a new gray area from the question's subject.
+        topic = _extract_topic(question)
+        if not topic:
+            return None
+        for g in grays:  # guard against a casing-only duplicate
+            if str(g.get("name", "")).lower() == topic.lower():
+                g["companies"] = int(g.get("companies") or 0) + 1
+                profile.gray_areas = grays
+                await self.db.flush()
+                return str(g.get("name"))
+        slug = re.sub(r"[^a-z0-9]+", "_", topic.lower()).strip("_")
+        grays.append({"name": topic, "area_id": f"g_{slug}", "companies": 1})
+        profile.gray_areas = grays
+        await self.db.flush()
+        return topic
 
     # ── AI chat (canned, streamed by the API layer) ─────────────────────
 

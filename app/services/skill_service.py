@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import NotFoundError
 from app.core.timefmt import to_wire, to_wire_opt
 from app.models.skill import SkillLedger as SkillLedgerModel
+from app.models.user import User
 from app.schemas.skill import (
     ExternalProof,
     InterviewerAuthority,
@@ -25,6 +26,29 @@ from app.schemas.skill import (
 )
 
 _FALLBACK_CANDIDATE_ID = "usr_cand_001"
+
+
+def _empty_ledger(user: User) -> SkillLedger:
+    """A fresh user has no `skill_ledgers` row yet. Rather than 404 (which
+    breaks the profile page on first login), return an empty-but-valid ledger
+    built from the user's own identity — zero skills, zero scores, no
+    interviewer authority. The profile renders its empty states cleanly and
+    fills in as the candidate completes sessions."""
+    name = f"{user.first_name} {user.last_name}".strip() or user.user_name or user.email
+    initials = (
+        f"{(user.first_name or '')[:1]}{(user.last_name or '')[:1]}".upper()
+        or (user.user_name or user.email)[:2].upper()
+    )
+    return SkillLedger(
+        candidateId=user.id,
+        candidateName=name,
+        candidateTitle="",
+        candidateLocation="",
+        candidateInitials=initials,
+        dossierId=user.id,
+        interviewerStatus=InterviewerStatus(mode="none"),
+        skills=[],
+    )
 
 
 def ledger_to_schema(row: SkillLedgerModel) -> SkillLedger:
@@ -109,6 +133,11 @@ class SkillService:
         # No cross-user fallback: a user without their own ledger must NOT be
         # shown another user's (mock) ledger — return 404 instead.
         row = await self.db.get(SkillLedgerModel, user_id) if user_id else None
-        if row is None:
+        if row is not None:
+            return ledger_to_schema(row)
+        # No ledger yet — a brand-new candidate. Build an empty ledger from
+        # their own user record so the profile renders instead of 404'ing.
+        user = await self.db.get(User, user_id) if user_id else None
+        if user is None:
             raise NotFoundError("No skill ledger yet")
-        return ledger_to_schema(row)
+        return _empty_ledger(user)

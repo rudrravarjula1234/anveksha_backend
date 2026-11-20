@@ -173,11 +173,59 @@ class CandidateService:
     # ── Insights ────────────────────────────────────────────────────────
 
     async def insights(self, user_id: Optional[str]) -> list[CandidateInsight]:
-        stmt = select(InsightModel).where(InsightModel.user_id == self._uid(user_id))
+        uid = self._uid(user_id)
+        stmt = select(InsightModel).where(InsightModel.user_id == uid)
         rows = (await self.db.execute(stmt)).scalars().all()
-        return [_insight_to_schema(r) for r in rows]
+        seed = [_insight_to_schema(r) for r in rows]
+        # Close the loop with company discovery (Scene 4 -> 5): the candidate's
+        # own gray areas, ranked by *live* company demand (public_profiles.
+        # gray_areas, written by company_service.note_gray_interest), surface
+        # here as "verify next" gap insights. This is what turns "a company
+        # asked about Kafka / GCP" into the candidate's personalised catalog.
+        dynamic = await self._gray_demand_insights(uid)
+        seen = {d.title.lower() for d in dynamic}
+        return dynamic + [s for s in seed if s.title.lower() not in seen]
+
+    async def _gray_demand_insights(self, uid: str) -> list[CandidateInsight]:
+        """Synthesize 'verify next' gap insights from the candidate's gray
+        areas that companies have actually asked about, most-demanded first.
+        Not stored rows — derived fresh each call so they track real demand."""
+        profile = await self.db.get(PublicProfileModel, uid)
+        grays = list(profile.gray_areas or []) if profile else []
+        grays = sorted(grays, key=lambda g: -int(g.get("companies") or 0))
+        out: list[CandidateInsight] = []
+        for g in grays:
+            companies = int(g.get("companies") or 0)
+            if companies <= 0:
+                continue
+            name = str(g.get("name", "")).strip()
+            if not name:
+                continue
+            area = str(g.get("area_id") or name.lower().replace(" ", "_"))
+            plural = "company" if companies == 1 else "companies"
+            out.append(
+                CandidateInsight(
+                    id=f"gi_{area}",
+                    kind="gap",
+                    title=f"Verify {name}",
+                    body=(
+                        f"{companies} {plural} asked about your {name} - it's still "
+                        "untested on your dossier. Book a verification to turn this "
+                        "gray area into a company-trusted, verified skill."
+                    ),
+                    cta="Book verification",
+                    companies=companies,
+                    acted=False,
+                )
+            )
+        return out
 
     async def act_on_insight(self, user_id: Optional[str], insight_id: str) -> None:
+        # Dynamic gray-demand insights (ids prefixed "gi_") have no stored row —
+        # acknowledging one is just a client-side jump to booking, so accept it
+        # as a no-op rather than 404.
+        if insight_id.startswith("gi_"):
+            return
         row = await self.db.get(InsightModel, insight_id)
         if row is None or row.user_id != self._uid(user_id):
             raise NotFoundError(f"Insight {insight_id} not found")
