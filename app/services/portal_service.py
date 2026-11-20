@@ -160,7 +160,14 @@ class BookingService:
         if catalog_id:
             row = await self.db.get(BookingCatalogModel, catalog_id)
         if row is None:
-            res = await self.db.execute(select(BookingCatalogModel).order_by(BookingCatalogModel.catalog_id).limit(1))
+            # Default = the oldest catalog. Ordering by id alone is unstable:
+            # the DB collation is case-insensitive, so newer `asm_…` ids
+            # sort before the original `ASS-…` ones and hijack the default.
+            res = await self.db.execute(
+                select(BookingCatalogModel)
+                .order_by(BookingCatalogModel.created_at, BookingCatalogModel.catalog_id)
+                .limit(1)
+            )
             row = res.scalar_one_or_none()
             if row is None:
                 row = await self.db.get(BookingCatalogModel, _FALLBACK_CATALOG_ID)
@@ -222,7 +229,12 @@ class BookingService:
         if not user_id:
             # Bookings belong to a users row (FK); never file one under someone else.
             raise ForbiddenError("A user record is required to book an interview")
-        catalog = await self.catalog()
+        catalog = await self.catalog(payload.catalogId)
+        # `catalog()` falls back to the default catalog for an unknown id —
+        # fine for browsing, but a booking must never be filed under a
+        # different assessment than the one the candidate picked.
+        if payload.catalogId and catalog.catalogId != payload.catalogId:
+            raise NotFoundError(f"Booking catalog {payload.catalogId} not found")
         booking_id = f"int_{str(ULID()).lower()}"
         # Whole seconds, matching the booking API's historical precision.
         scheduled_at = utc_now().replace(microsecond=0)

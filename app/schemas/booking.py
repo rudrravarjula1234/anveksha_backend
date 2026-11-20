@@ -48,6 +48,9 @@ class BookingCatalog(ReadModel):
 class ScheduleRequest(AppModel):
     dayId: str
     slotId: str
+    # The assessment's booking catalog to book against. Optional for
+    # backward compatibility: omitted → the default (first) catalog.
+    catalogId: Optional[str] = None
 
 
 class ScheduleResponse(ReadModel):

@@ -95,6 +95,33 @@ async def test_booking_catalog_and_schedule(client: AsyncClient):
 
 
 @pytest.mark.asyncio
+async def test_schedule_books_against_the_requested_catalog(client: AsyncClient):
+    r = await client.post(
+        "/api/interviews/schedule",
+        json={"dayId": "d5", "slotId": "s2", "catalogId": "KAF-204"},
+        headers=_hdr(*AARAV),
+    )
+    assert r.status_code == 200
+    booked = r.json()
+    assert booked["catalog"]["catalogId"] == "KAF-204"
+
+    # The stored booking points at the requested catalog.
+    r = await client.get("/api/interviews/my-interviews", headers=_hdr(*AARAV))
+    mine = {i["id"]: i for i in r.json()}
+    assert mine[booked["id"]]["catalog_id"] == "KAF-204"
+
+
+@pytest.mark.asyncio
+async def test_schedule_unknown_catalog_is_404_not_a_silent_fallback(client: AsyncClient):
+    r = await client.post(
+        "/api/interviews/schedule",
+        json={"dayId": "d5", "slotId": "s2", "catalogId": "NOPE-999"},
+        headers=_hdr(*AARAV),
+    )
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_live_session_snapshot(client: AsyncClient):
     r = await client.get(
         "/api/interviews/session/KAF-88421", headers=_hdr(*AARAV)
