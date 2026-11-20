@@ -1,0 +1,108 @@
+- generic [ref=f3e4]:
+  - banner [ref=f3e5]:
+    - generic [ref=f3e6]:
+      - generic [ref=f3e7]:
+        - link "Anveksha mark Anveksha" [ref=f3e8] [cursor=pointer]:
+          - /url: /
+          - generic [ref=f3e9]:
+            - img "Anveksha mark" [ref=f3e10]
+            - generic [ref=f3e15]: Anveksha
+        - generic [ref=f3e16]:
+          - generic [ref=f3e17]: C
+          - text: Candidate
+      - generic [ref=f3e18]:
+        - generic [ref=f3e19]: RAW v1.4 · connected
+        - button "Sign out" [ref=f3e20] [cursor=pointer]
+        - generic "Sai Rajesh Candidate" [ref=f3e21]: SR
+  - generic [ref=f3e22]:
+    - complementary [ref=f3e23]:
+      - generic [ref=f3e24]: CANDIDATE PORTAL
+      - navigation [ref=f3e25]:
+        - link "Assessments" [ref=f3e27] [cursor=pointer]:
+          - /url: /candidate/assessments
+        - link "My Profile" [ref=f3e33] [cursor=pointer]:
+          - /url: /candidate/profile
+        - link "Public Profile" [ref=f3e40] [cursor=pointer]:
+          - /url: /candidate/public-profile
+        - link "Onboarding" [ref=f3e47] [cursor=pointer]:
+          - /url: /candidate/onboarding
+        - link "Skill Reports" [ref=f3e53] [cursor=pointer]:
+          - /url: /candidate/reports
+        - link "My Insights" [ref=f3e60] [cursor=pointer]:
+          - /url: /candidate/insights
+        - link "Session History" [ref=f3e66] [cursor=pointer]:
+          - /url: /candidate/sessions
+        - link "Notifications" [ref=f3e73] [cursor=pointer]:
+          - /url: /candidate/notifications
+        - link "Privacy & Sharing" [ref=f3e80] [cursor=pointer]:
+          - /url: /candidate/privacy
+    - main [ref=f3e86]:
+      - generic [ref=f3e88]:
+        - generic [ref=f3e89]:
+          - generic [ref=f3e90]: Session catalog · ASS-001
+          - heading ".NET Microservices" [level=2] [ref=f3e91]
+          - paragraph [ref=f3e92]: Hands-on verification of C# and distributed microservices architecture.
+          - generic [ref=f3e93]:
+            - generic [ref=f3e94]:
+              - generic [ref=f3e95]: Depth
+              - generic [ref=f3e96]: Advanced
+            - generic [ref=f3e97]:
+              - generic [ref=f3e98]: Duration
+              - generic [ref=f3e99]: 60 minutes
+            - generic [ref=f3e100]:
+              - generic [ref=f3e101]: Style
+              - generic [ref=f3e102]: Conversational + Technical Deep Dive
+            - generic [ref=f3e103]:
+              - generic [ref=f3e104]: Format
+              - generic [ref=f3e105]: 1:1 Live with Verifier + AI Co-Pilot
+            - generic [ref=f3e106]:
+              - generic [ref=f3e107]: Evidence
+              - generic [ref=f3e108]: Transcript + Rubric Proof-of-Skill Report
+          - generic [ref=f3e109]:
+            - generic [ref=f3e110]: What will be probed
+            - text: Outbox pattern, Polly, Async streams
+        - generic [ref=f3e111]:
+          - generic [ref=f3e112]:
+            - heading "Select a slot" [level=3] [ref=f3e113]
+            - generic [ref=f3e114]: Nov 24 - Nov 30
+          - generic [ref=f3e115]:
+            - generic [ref=f3e116]: 01 · DAY
+            - generic [ref=f3e117]: 02 · TIME
+            - generic [ref=f3e118]: 03 · CONFIRM
+          - generic [ref=f3e119]:
+            - button "Mon Nov 24 3 slots" [active] [ref=f3e120] [cursor=pointer]:
+              - generic [ref=f3e121]: Mon
+              - generic [ref=f3e122]: Nov 24
+              - generic [ref=f3e123]: 3 slots
+            - button "Wed Nov 26 3 slots" [ref=f3e124] [cursor=pointer]:
+              - generic [ref=f3e125]: Wed
+              - generic [ref=f3e126]: Nov 26
+              - generic [ref=f3e127]: 3 slots
+            - button "Fri Nov 28 3 slots" [ref=f3e128] [cursor=pointer]:
+              - generic [ref=f3e129]: Fri
+              - generic [ref=f3e130]: Nov 28
+              - generic [ref=f3e131]: 3 slots
+          - generic [ref=f3e132]:
+            - generic [ref=f3e133]: Mon · Nov 24 · Verifier + Time
+            - generic [ref=f3e134]:
+              - button "10:00 AM Anveksha Verifier Anveksha Verifier ★ 4.95 60 min" [ref=f3e135] [cursor=pointer]:
+                - generic [ref=f3e136]: 10:00 AM
+                - generic [ref=f3e137]:
+                  - generic "Anveksha Verifier" [ref=f3e138]: AV
+                  - generic [ref=f3e139]: Anveksha Verifier
+                  - generic [ref=f3e140]: ★ 4.95
+                - generic [ref=f3e141]: 60 min
+              - button "02:00 PM Anveksha Verifier Anveksha Verifier ★ 4.95 60 min" [ref=f3e144] [cursor=pointer]:
+                - generic [ref=f3e145]: 02:00 PM
+                - generic [ref=f3e146]:
+                  - generic "Anveksha Verifier" [ref=f3e147]: AV
+                  - generic [ref=f3e148]: Anveksha Verifier
+                  - generic [ref=f3e149]: ★ 4.95
+                - generic [ref=f3e150]: 60 min
+              - button "06:00 PM Anveksha Verifier Anveksha Verifier ★ 4.95 60 min" [ref=f3e153] [cursor=pointer]:
+                - generic [ref=f3e154]: 06:00 PM
+                - generic [ref=f3e155]:
+                  - generic "Anveksha Verifier" [ref=f3e156]: AV
+                  - generic [ref=f3e157]: Anveksha Verifier
+                  - generic [ref=f3e158]: ★ 4.95
+                - generic [ref=f3e159]: 60 min

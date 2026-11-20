@@ -1,0 +1,19 @@
+- generic [ref=f3e4]:
+  - generic [ref=f3e5]:
+    - generic [ref=f3e6]: RAW
+    - generic [ref=f3e11]: Sign in to continue
+  - generic [ref=f3e13]:
+    - button "Sign in with Google. Opens in new tab" [ref=f3e15] [cursor=pointer]:
+      - generic [ref=f3e17]: Sign in with Google
+    - iframe
+  - generic [ref=f3e27]: or continue as guest
+  - generic [ref=f3e28]:
+    - generic [ref=f3e29]: Your name
+    - textbox "Your name" [active] [ref=f3e30]:
+      - /placeholder: Aarav Sharma
+  - generic [ref=f3e31]:
+    - generic [ref=f3e32]: Room
+    - textbox "Room" [ref=f3e33]:
+      - /placeholder: verification-session
+      - text: int_01m7tk5r48sybs57jbeyk585dj
+  - button "Join session" [ref=f3e34] [cursor=pointer]

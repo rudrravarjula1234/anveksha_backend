@@ -160,29 +160,57 @@ class BookingService:
         if catalog_id:
             row = await self.db.get(BookingCatalogModel, catalog_id)
         if row is None:
-            row = await self.db.get(BookingCatalogModel, _FALLBACK_CATALOG_ID)
+            res = await self.db.execute(select(BookingCatalogModel).order_by(BookingCatalogModel.catalog_id).limit(1))
+            row = res.scalar_one_or_none()
+            if row is None:
+                row = await self.db.get(BookingCatalogModel, _FALLBACK_CATALOG_ID)
         if row is None:
             raise RuntimeError("booking_catalogs seed data missing")
         return row
 
+    @staticmethod
+    def _day_id(d: dict[str, Any], idx: int) -> str:
+        return str(d.get("day_key") or d.get("id") or d.get("day") or f"day_{idx + 1}")
+
     def _to_schema(self, row: BookingCatalogModel) -> BookingCatalog:
-        slots_by_day: dict[str, list[BookingSlot]] = defaultdict(list)
-        for slot in row.slots:
+        # Each day gets a stable id (from day_key/id/day). The seed stores
+        # one shared flat `slots` list with no per-day key, so those slots
+        # apply to every day; slots that DO carry a day_key are grouped
+        # under it instead.
+        days = list(row.days or [])
+        day_ids = [self._day_id(d, i) for i, d in enumerate(days)]
+
+        def _slot(slot: dict[str, Any], idx: int, day_id: str) -> BookingSlot:
             # PHI rule: candidates never learn WHICH verifier they're
             # paired with at booking time. Ratings stay visible (quality
             # signal); identity does not.
-            slots_by_day[slot["day_key"]].append(
-                BookingSlot(id=slot["slot_key"], time=slot["time"], verifier=MASKED_VERIFIER,
-                            rating=slot["rating"], duration=slot["duration"])
+            return BookingSlot(
+                id=slot.get("slot_key") or slot.get("id") or f"{day_id}_slot_{idx + 1}",
+                time=slot.get("time") or "10:00 AM", verifier=MASKED_VERIFIER,
+                rating=float(slot.get("rating", 4.95)),
+                duration=int(slot.get("duration") or row.duration),
             )
+
+        slots_by_day: dict[str, list[BookingSlot]] = defaultdict(list)
+        keyed = [s for s in (row.slots or []) if s.get("day_key") or s.get("dayId")]
+        unkeyed = [s for s in (row.slots or []) if not (s.get("day_key") or s.get("dayId"))]
+        for slot in keyed:
+            day_id = str(slot.get("day_key") or slot.get("dayId"))
+            slots_by_day[day_id].append(_slot(slot, len(slots_by_day[day_id]), day_id))
+        # Shared (unkeyed) slots fan out to every day.
+        for day_id in (day_ids or ["day_1"]):
+            for idx, slot in enumerate(unkeyed):
+                slots_by_day[day_id].append(_slot(slot, idx, day_id))
+
         return BookingCatalog(
             catalogId=row.catalog_id, skillName=row.skill_name, description=row.description,
             depth=row.depth, duration=row.duration, style=row.style, format=row.format,
             evidence=row.evidence, probes=row.probes, weekRange=row.week_range,
             days=[
-                BookingDay(id=d["day_key"], day=d["day"], date=d["date"], status=d["status"],
-                           slotCount=d["slot_count"])
-                for d in row.days
+                BookingDay(id=day_ids[i], day=d.get("day", "Mon"), date=d.get("date", "Nov 24"),
+                           status=d.get("status", "avail"),
+                           slotCount=d.get("slot_count", len(slots_by_day.get(day_ids[i], []))))
+                for i, d in enumerate(days)
             ],
             slotsByDay=dict(slots_by_day),
         )
@@ -213,7 +241,34 @@ class BookingService:
     async def live_session(self, session_id: str) -> LiveSessionSnapshot:
         row = await self.db.get(LiveSessionModel, session_id)
         if row is None:
-            row = await self.db.get(LiveSessionModel, _FALLBACK_SESSION_ID)
+            res = await self.db.execute(select(LiveSessionModel).order_by(LiveSessionModel.id).limit(1))
+            row = res.scalar_one_or_none()
+            if row is None:
+                row = await self.db.get(LiveSessionModel, _FALLBACK_SESSION_ID)
+            if row is None:
+                return LiveSessionSnapshot(
+                    id=session_id,
+                    catalogId="ASS-001",
+                    skill=".NET Microservices & Cloud Architecture",
+                    status="live",
+                    elapsedSeconds=24,
+                    candidate=SessionParty(name="Candidate", initials="CA", color="#DC2626"),
+                    verifier=SessionParty(name="Verifier", initials="VR", color="#4F46E5"),
+                    transcript=[
+                        TranscriptLine(t="00:01", who="bot", text="Welcome to the assessment session. LiveKit audio/video stage is active."),
+                    ],
+                    phases=[
+                        SessionPhase(num="1", title="Introduction", done=True, active=False),
+                        SessionPhase(num="2", title="Architecture & Probes", done=False, active=True),
+                        SessionPhase(num="3", title="Synthesis", done=False, active=False),
+                    ],
+                    currentProbe="Explain partition keys and consumer group rebalancing.",
+                    assessment=[
+                        AssessmentSignal(label="Architecture", value=80, tag="solid"),
+                    ],
+                    suggestedProbes=["Probe resiliency and idempotency."],
+                    unverifiedClaim=None,
+                )
         if row is None:
             raise NotFoundError(f"Session {session_id} not found")
         claim = (

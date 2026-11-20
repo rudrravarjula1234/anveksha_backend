@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     DATABASE_POOL_RECYCLE_S: int = Field(
         default=1800, description="Recycle pooled connections after this many seconds (avoids stale/killed ones)."
     )
+    SEED_DATA: bool = Field(
+        default=False, description="Run seeders on startup when True. Default False so mock data is not auto-seeded."
+    )
 
     # ─── CORS ────────────────────────────────────────────────────────────
     CORS_ORIGINS: str = Field(default="http://localhost:5173")

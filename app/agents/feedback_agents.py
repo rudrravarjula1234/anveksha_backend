@@ -14,7 +14,11 @@ from typing import Any, Dict, Optional
 
 from .schemas import AgentConfig, OrchestrationConfig
 
-DEFAULT_FEEDBACK_MODEL = "gemini-2.0-flash"
+# gemini-2.0-flash and 2.5-flash are retired / blocked for new users on the
+# OpenAI-compat completions endpoint; gemini-3.8-flash is the current callable
+# flash model (confirmed with a live chat.completions call on the active key).
+# Must match an `ai_models.model` value — see wire_gemini.py.
+DEFAULT_FEEDBACK_MODEL = "gemini-3.8-flash"
 
 
 def get_transcript_analysis_agent_config(

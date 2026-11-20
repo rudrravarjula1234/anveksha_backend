@@ -1,0 +1,47 @@
+- generic [ref=f3e4]:
+  - banner [ref=f3e5]:
+    - generic [ref=f3e6]:
+      - generic [ref=f3e7]:
+        - link "Anveksha mark Anveksha" [ref=f3e8] [cursor=pointer]:
+          - /url: /
+          - generic [ref=f3e9]:
+            - img "Anveksha mark" [ref=f3e10]
+            - generic [ref=f3e15]: Anveksha
+        - generic [ref=f3e16]:
+          - generic [ref=f3e17]: C
+          - text: Candidate
+      - generic [ref=f3e18]:
+        - generic [ref=f3e19]: RAW v1.4 · connected
+        - button "Sign out" [ref=f3e20] [cursor=pointer]
+        - generic "Sai Rajesh Candidate" [ref=f3e21]: SR
+  - generic [ref=f3e22]:
+    - complementary [ref=f3e23]:
+      - generic [ref=f3e24]: CANDIDATE PORTAL
+      - navigation [ref=f3e25]:
+        - link "Assessments" [ref=f3e27] [cursor=pointer]:
+          - /url: /candidate/assessments
+        - link "My Profile" [ref=f3e33] [cursor=pointer]:
+          - /url: /candidate/profile
+        - link "Public Profile" [ref=f3e40] [cursor=pointer]:
+          - /url: /candidate/public-profile
+        - link "Onboarding" [ref=f3e47] [cursor=pointer]:
+          - /url: /candidate/onboarding
+        - link "Skill Reports" [ref=f3e53] [cursor=pointer]:
+          - /url: /candidate/reports
+        - link "My Insights" [ref=f3e60] [cursor=pointer]:
+          - /url: /candidate/insights
+        - link "Session History" [ref=f3e66] [cursor=pointer]:
+          - /url: /candidate/sessions
+        - link "Notifications" [ref=f3e73] [cursor=pointer]:
+          - /url: /candidate/notifications
+        - link "Privacy & Sharing" [ref=f3e80] [cursor=pointer]:
+          - /url: /candidate/privacy
+    - main [ref=f3e86]:
+      - generic [ref=f3e87]:
+        - generic [ref=f3e88]: FIG. 02 · BOOKED
+        - heading "You’re booked." [level=1] [ref=f3e169]
+        - paragraph [ref=f3e170]: .NET Microservices · Mon Nov 24 at 10:00 AM with Anveksha Verifier. Confirmation sent to your inbox.
+        - generic [ref=f3e171]:
+          - button "Launch Live Stage (RAW WebRTC) →" [active] [ref=f3e172] [cursor=pointer]
+          - button "Back to profile" [ref=f3e173] [cursor=pointer]
+          - button "Enter session room" [ref=f3e174] [cursor=pointer]

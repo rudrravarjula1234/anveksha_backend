@@ -1,0 +1,40 @@
+- generic [ref=e45]:
+  - banner [ref=e46]:
+    - generic [ref=e47]:
+      - generic [ref=e48]:
+        - link "Anveksha mark Anveksha" [ref=e49] [cursor=pointer]:
+          - /url: /
+          - generic [ref=e50]:
+            - img "Anveksha mark" [ref=e51]
+            - generic [ref=e56]: Anveksha
+        - generic [ref=e57]:
+          - generic [ref=e58]: C
+          - text: Candidate
+      - generic [ref=e59]:
+        - generic [ref=e60]: RAW v1.4 · connected
+        - button "Sign out" [ref=e61] [cursor=pointer]
+        - generic "Sai Rajesh Candidate" [ref=e62]: SR
+  - generic [ref=e63]:
+    - complementary [ref=e64]:
+      - generic [ref=e65]: CANDIDATE PORTAL
+      - navigation [ref=e66]:
+        - link "Assessments" [ref=e68] [cursor=pointer]:
+          - /url: /candidate/assessments
+        - link "My Profile" [ref=e74] [cursor=pointer]:
+          - /url: /candidate/profile
+        - link "Public Profile" [ref=e81] [cursor=pointer]:
+          - /url: /candidate/public-profile
+        - link "Onboarding" [ref=e88] [cursor=pointer]:
+          - /url: /candidate/onboarding
+        - link "Skill Reports" [ref=e94] [cursor=pointer]:
+          - /url: /candidate/reports
+        - link "My Insights" [ref=e101] [cursor=pointer]:
+          - /url: /candidate/insights
+        - link "Session History" [ref=e107] [cursor=pointer]:
+          - /url: /candidate/sessions
+        - link "Notifications" [ref=e114] [cursor=pointer]:
+          - /url: /candidate/notifications
+        - link "Privacy & Sharing" [ref=e121] [cursor=pointer]:
+          - /url: /candidate/privacy
+    - main [ref=e127]:
+      - generic [ref=e128]: Loading skill ledger…

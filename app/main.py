@@ -4,7 +4,12 @@ The app is built by `create_app()` rather than at module import time so
 tests can construct a fresh instance with overridden dependencies.
 """
 
+import asyncio
 import logging
+import sys
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -64,15 +69,16 @@ async def lifespan(_app: FastAPI):
     # Postgres (Supabase). Schema itself is managed by Alembic
     # (`alembic upgrade head`), not created here.
     await connect_to_db()
-    async with get_sessionmaker()() as seed_session:
-        # H1: fast-path restarts — when a previous boot already committed
-        # the full seed set, skip replaying ~13 seeders (~260 queries /
-        # ~1 s on every warm restart).
-        if await seeds_present(seed_session):
-            log.info("Seed data present — skipping run_seeds (fast-path).")
-        else:
-            await run_seeds(seed_session)
-            await seed_session.commit()
+    if settings.SEED_DATA:
+        async with get_sessionmaker()() as seed_session:
+            # H1: fast-path restarts — when a previous boot already committed
+            # the full seed set, skip replaying ~13 seeders (~260 queries /
+            # ~1 s on every warm restart).
+            if await seeds_present(seed_session):
+                log.info("Seed data present — skipping run_seeds (fast-path).")
+            else:
+                await run_seeds(seed_session)
+                await seed_session.commit()
     try:
         yield
     finally:
