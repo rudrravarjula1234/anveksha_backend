@@ -10,8 +10,9 @@ async def test_dev_login_candidate(client: AsyncClient):
     )
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["user"]["id"] == "usr_cand_001"
-    assert body["user"]["email"] == "aarav.rao@anveksha.dev"
+    # Real accounts are preferred over the demo personas.
+    assert body["user"]["id"] == "usr_cand_rajesh"
+    assert body["user"]["email"] == "rajesh.rudravarjula@gmail.com"
     assert body["access_token"].startswith("dev_")
     assert body["refresh_token"].endswith(".refresh")
     assert body["token_type"] == "bearer"
@@ -48,7 +49,7 @@ async def test_me_roundtrip(client: AsyncClient):
     token = login.json()["access_token"]
     r = await client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200
-    assert r.json()["id"] == "usr_adm_001"
+    assert r.json()["id"] == "usr_adm_rajesh"
     assert r.json()["roles"] == ["admin"]
 
 
@@ -61,7 +62,7 @@ async def test_refresh_reissues_for_same_user(client: AsyncClient):
     refresh_token = login.json()["refresh_token"]
     r = await client.post("/api/auth/refresh", json={"refresh_token": refresh_token})
     assert r.status_code == 200
-    assert r.json()["user"]["id"] == "usr_cand_001"
+    assert r.json()["user"]["id"] == "usr_cand_rajesh"
     assert r.json()["access_token"].startswith("dev_")
 
 

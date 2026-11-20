@@ -91,20 +91,30 @@ class AuthService:
     # ── Lookups ─────────────────────────────────────────────────────────
 
     async def _default_user_for_role(self, role: UserRole) -> Optional[UserModel]:
-        """The persona the dev-login button for `role` should land on.
+        """The account the dev-login button for `role` should land on.
 
-        Deterministic: results are sorted by stable seed `id` (usr_cand_001,
-        etc.) to match the frontend's keyed lookup. The specialist
-        (usr_spec_001) is excluded from role-based resolution — she is only
-        reachable via an explicit userId, same as the frontend.
+        1. A real (non-demo) account whose primary — first — role is `role`.
+           So an admin who also holds 'interviewer' isn't picked for the
+           interviewer button when a dedicated interviewer account exists.
+        2. Otherwise the demo personas, as before: primary role matching
+           first or last (e.g. Maya, candidate-first interviewer), sorted by
+           stable seed id. The specialist (usr_spec_001) is only reachable
+           via an explicit userId.
+        Deterministic within each tier (sorted by id).
         """
+        from app.db.seed import DEMO_PERSONA_IDS
+
         candidates = await self.repo.list_by_role(role)
+        real_primary = sorted(
+            (u for u in candidates if u.id not in DEMO_PERSONA_IDS and self._role_at(u, 0) == role),
+            key=lambda u: u.id,
+        )
+        if real_primary:
+            return real_primary[0]
         non_specialist = [u for u in candidates if u.id != "usr_spec_001"]
         pool = non_specialist or candidates
         if not pool:
             return None
-        # Prefer the persona whose PRIMARY (first) role matches, e.g. for
-        # role='interviewer' prefer Maya over a candidate-first overlap.
         exact = [u for u in pool if self._role_at(u, -1) == role or self._role_at(u, 0) == role]
         chosen = sorted(exact or pool, key=lambda u: u.id)
         return chosen[0]

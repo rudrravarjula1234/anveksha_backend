@@ -65,6 +65,10 @@ class Settings(BaseSettings):
     SEED_DATA: bool = Field(
         default=False, description="Run seeders on startup when True. Default False so mock data is not auto-seeded."
     )
+    AGENT_CALL_TIMEOUT_SECONDS: float = Field(
+        default=30.0,
+        description="Per-model time limit for one agent call; past it the next model in the fallback chain is tried.",
+    )
 
     # ─── CORS ────────────────────────────────────────────────────────────
     CORS_ORIGINS: str = Field(default="http://localhost:5173")

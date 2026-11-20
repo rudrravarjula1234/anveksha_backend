@@ -114,6 +114,12 @@ SEED_USERS: list[dict] = [
     },
 ]
 
+# The demo personas above (mock-parity accounts, not real people). Dev-login
+# prefers real accounts over these whenever both exist.
+DEMO_PERSONA_IDS: frozenset[str] = frozenset(
+    {"usr_cand_001", "usr_ver_001", "usr_spec_001", "usr_co_001", "usr_hr_001", "usr_adm_001"}
+)
+
 
 async def seed_users(db: AsyncSession) -> int:
     """Insert any missing seed users (Postgres). Returns how many were
