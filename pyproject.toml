@@ -18,6 +18,12 @@ dependencies = [
   "psycopg[binary,pool]>=3.2.0",  # async Postgres driver — see app/db/session.py
   "alembic>=1.13.0",
   "greenlet>=3.0.0",  # required by SQLAlchemy's asyncio extension
+  # ── Agentic framework (app/agents) ────────────────────────────────────
+  # Required: without it every AI agent silently answers from its template
+  # fallback instead of calling a model. Pins match the legacy backend.
+  "autogen-core==0.7.5",
+  "autogen-agentchat==0.7.5",
+  "autogen-ext[openai,anthropic,azure,ollama,mcp]==0.7.5",
 ]
 
 [project.optional-dependencies]
@@ -28,12 +34,8 @@ dev = [
   "mypy>=1.10.0",
   "anyio>=4.0.0",
 ]
-# Agentic framework extras (app/agents). The API boots without these; agentic
-# endpoints return 503 until installed. Pins match the legacy backend.
+# Optional extra for exact OpenAI token counting (app/agents/token_usage).
 agents = [
-  "autogen-core==0.7.5",
-  "autogen-agentchat==0.7.5",
-  "autogen-ext[openai,anthropic,azure,ollama,mcp]==0.7.5",
   "tiktoken>=0.5.0",
 ]
 # Durable workflow extra (app/temporal). The API boots without it; the

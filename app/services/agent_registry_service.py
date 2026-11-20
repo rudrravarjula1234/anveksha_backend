@@ -17,6 +17,7 @@ The result envelope says which path produced the text (`source`), so the
 UI can badge AI output appropriately.
 """
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Optional
@@ -24,6 +25,7 @@ from typing import Any, Awaitable, Callable, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.exceptions import NotFoundError, ValidationError
 from app.core.timefmt import to_wire
 from app.models.agent_registry import AgentConfig as AgentConfigModel
@@ -123,28 +125,42 @@ class AgentRegistryService:
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def _model_chain(self, config: AgentConfig) -> list[AIModel]:
+        """The resolved model, then each active model its `fallback_id`
+        points to, in order (cycles and inactive models skipped)."""
+        chain: list[AIModel] = []
+        model = await self._resolve_model(config)
+        seen: set[str] = set()
+        while model is not None and model.id not in seen:
+            seen.add(model.id)
+            if model.status == "active":
+                chain.append(model)
+            model = await self.models_repo.find_by_id(model.fallback_id) if model.fallback_id else None
+        return chain
+
     async def run_agent(self, agent_id: str, context: dict[str, Any]) -> AgentRunResult:
         config = await self.get(agent_id)
         if not config.enabled:
             return await self._fallback(agent_id, context, model_id=None)
 
-        model = await self._resolve_model(config)
-
-        # Try the real framework when it's importable + a credential exists.
-        if model is not None:
+        # Try each model in the fallback chain, each with a time limit, so an
+        # overloaded or hanging model hands over instead of stalling the
+        # request. Only when every model fails does the template answer run.
+        chain = await self._model_chain(config)
+        timeout = get_settings().AGENT_CALL_TIMEOUT_SECONDS
+        for model in chain:
             try:
-                output = await self._run_real(config, model, context)
-                if output is not None:
-                    return AgentRunResult(
-                        agentId=agent_id,
-                        output=output,
-                        source="agent",
-                        modelId=model.id,
-                    )
+                output = await asyncio.wait_for(self._run_real(config, model, context), timeout)
+            except asyncio.TimeoutError:
+                log.warning("Agent %s: model %s timed out after %ss; trying the next.", agent_id, model.id, timeout)
+                continue
             except Exception:  # noqa: BLE001 — degrade, never break the feature
-                log.exception("Agent %s real-run failed; falling back.", agent_id)
+                log.exception("Agent %s: model %s failed; trying the next.", agent_id, model.id)
+                continue
+            if output is not None:
+                return AgentRunResult(agentId=agent_id, output=output, source="agent", modelId=model.id)
 
-        return await self._fallback(agent_id, context, model_id=model.id if model else None)
+        return await self._fallback(agent_id, context, model_id=chain[0].id if chain else None)
 
     async def _run_real(
         self, config: AgentConfig, model: AIModel, context: dict[str, Any]

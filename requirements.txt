@@ -16,15 +16,12 @@ psycopg[binary,pool]>=3.2.0  # async Postgres driver — see app/db/session.py
 alembic>=1.13.0
 greenlet>=3.0.0  # required by SQLAlchemy's asyncio extension
 
-# ── Optional: agentic framework extras (app/agents) ─────────────────────────
-# The API boots and runs WITHOUT these — app/agents guards all AutoGen imports
-# and agentic endpoints return 503 until they are installed. Versions pinned to
-# match the legacy backend (C:\Development\backend\requirements.txt).
-# Install with:  pip install -r requirements.txt  after uncommenting, or
-#                pip install ".[agents]"
-# autogen-core==0.7.5
-# autogen-agentchat==0.7.5
-# autogen-ext[openai,anthropic,azure,ollama,mcp]==0.7.5
+# ── Agentic framework (app/agents) ──────────────────────────────────────────
+# Required: without it every AI agent silently answers from its template
+# fallback instead of calling a model. Versions pinned to match the legacy backend.
+autogen-core==0.7.5
+autogen-agentchat==0.7.5
+autogen-ext[openai,anthropic,azure,ollama,mcp]==0.7.5
 # tiktoken>=0.5.0          # exact token counting for OpenAI models (optional)
 
 # ── Durable workflows (app/temporal) ────────────────────────────────────────
