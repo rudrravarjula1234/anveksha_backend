@@ -185,22 +185,23 @@ class CompanyService:
         stmt = select(CreditTransactionModel).order_by(CreditTransactionModel.at.desc()).limit(1000)
         return list(reversed((await self.db.execute(stmt)).scalars().all()))
 
-    @staticmethod
-    def _credits_response(
-        balance: int, sums: dict[str, int], rows: list[CreditTransactionModel]
+    async def _credits_response(
+        self, balance: int, sums: dict[str, int], rows: list[CreditTransactionModel]
     ) -> CompanyCredits:
+        rate = await self.db.get(CreditRateModel, "default")
         return CompanyCredits(
             balance=balance,
             earnedThisMonth=sums.get("earned", 0),
             spentThisMonth=sums.get("spent", 0),
             ledger=[_tx_to_schema(r) for r in rows],
+            rupeesPerCredit=rate.rupees_per_credit if rate is not None else None,
         )
 
     async def credits(self) -> CompanyCredits:
         company = await self._company_row()
         rows = await self._ledger_rows()
         sums = await self._month_sums()
-        return self._credits_response(company.credit_balance, sums, rows)
+        return await self._credits_response(company.credit_balance, sums, rows)
 
     async def _apply_tx(self, kind: str, body: CreditMutation) -> CompanyCredits:
         # One conditional UPDATE ... RETURNING: the balance check and the
@@ -248,7 +249,7 @@ class CompanyService:
         # in this transaction) and issued two separate month-SUM queries.
         sums = await self._month_sums()
         rows = await self._ledger_rows()
-        return self._credits_response(new_balance, sums, rows)
+        return await self._credits_response(new_balance, sums, rows)
 
     async def earn(self, body: CreditMutation) -> CompanyCredits:
         return await self._apply_tx("earned", body)
@@ -428,6 +429,7 @@ class CompanyService:
             query=body.query,
             candidates=matches,
             facets=facets,
+            unlockCost=self.UNLOCK_COST,
         )
 
     async def pipeline(self) -> PipelineBoard:

@@ -113,7 +113,7 @@ class VerifierService:
         return VerifierQueue(
             stats=VerifierStats(
                 rating=row.rating, sessionCount=row.sessions, reliability=row.reliability,
-                earnings=row.current_amount,
+                earnings=row.current_amount, earningsMonth=row.current_month,
             ),
             live=lanes["live"], upcoming=lanes["upcoming"], completed=lanes["completed"],
         )

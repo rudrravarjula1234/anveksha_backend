@@ -22,6 +22,9 @@ class VerifierStats(ReadModel):
     sessionCount: int
     reliability: int
     earnings: int
+    # The month `earnings` covers (e.g. "Nov 2026"), so the UI never
+    # labels the figure with a guessed month.
+    earningsMonth: str = ""
 
 
 class VerifierSession(ReadModel):

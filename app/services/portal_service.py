@@ -7,7 +7,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
-from app.core.demo import DEMO_CANDIDATE_ID
 from app.core.exceptions import ForbiddenError, NotFoundError
 from app.core.privacy import MASKED_VERIFIER
 from app.core.timefmt import to_wire, utc_now
@@ -37,7 +36,6 @@ from app.schemas.privacy import PrivacyPatch, PrivacySettings, SharedReport
 from app.services.skill_service import ledger_to_schema
 
 _FALLBACK_CATALOG_ID = "KAF-204"
-_FALLBACK_SESSION_ID = "KAF-88421"
 
 
 def _privacy_to_schema(row: PrivacySettingsModel) -> PrivacySettings:
@@ -134,9 +132,9 @@ class DossierService:
     async def get_by_id(self, dossier_id: str) -> Dossier:
         row = await self.db.get(DossierModel, dossier_id)
         if row is None:
-            # Mock parity: any id resolves to the seeded demo dossier (the
-            # company dossier page is routed by candidate id, not dossier id).
-            row = await self._row_of(DEMO_CANDIDATE_ID)
+            # The company dossier page is routed by candidate id, so accept
+            # that too. Never substitute another candidate's dossier.
+            row = await self._row_of(dossier_id)
         if row is None:
             raise NotFoundError(f"Dossier {dossier_id} not found")
         return await self._load(row)
@@ -251,36 +249,9 @@ class BookingService:
         )
 
     async def live_session(self, session_id: str) -> LiveSessionSnapshot:
+        # The requested session or a 404 — never another session's data or a
+        # synthesized stand-in.
         row = await self.db.get(LiveSessionModel, session_id)
-        if row is None:
-            res = await self.db.execute(select(LiveSessionModel).order_by(LiveSessionModel.id).limit(1))
-            row = res.scalar_one_or_none()
-            if row is None:
-                row = await self.db.get(LiveSessionModel, _FALLBACK_SESSION_ID)
-            if row is None:
-                return LiveSessionSnapshot(
-                    id=session_id,
-                    catalogId="ASS-001",
-                    skill=".NET Microservices & Cloud Architecture",
-                    status="live",
-                    elapsedSeconds=24,
-                    candidate=SessionParty(name="Candidate", initials="CA", color="#DC2626"),
-                    verifier=SessionParty(name="Verifier", initials="VR", color="#4F46E5"),
-                    transcript=[
-                        TranscriptLine(t="00:01", who="bot", text="Welcome to the assessment session. LiveKit audio/video stage is active."),
-                    ],
-                    phases=[
-                        SessionPhase(num="1", title="Introduction", done=True, active=False),
-                        SessionPhase(num="2", title="Architecture & Probes", done=False, active=True),
-                        SessionPhase(num="3", title="Synthesis", done=False, active=False),
-                    ],
-                    currentProbe="Explain partition keys and consumer group rebalancing.",
-                    assessment=[
-                        AssessmentSignal(label="Architecture", value=80, tag="solid"),
-                    ],
-                    suggestedProbes=["Probe resiliency and idempotency."],
-                    unverifiedClaim=None,
-                )
         if row is None:
             raise NotFoundError(f"Session {session_id} not found")
         claim = (

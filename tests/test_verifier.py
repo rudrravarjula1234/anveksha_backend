@@ -160,3 +160,10 @@ async def test_earnings(client: AsyncClient):
     assert r.json()["ytdAmount"] == 332700
     assert len(r.json()["months"]) == 4
     assert len(r.json()["rateCard"]) == 5
+
+
+@pytest.mark.asyncio
+async def test_queue_names_the_month_its_earnings_cover(client: AsyncClient):
+    r = await client.get("/api/verifier/queue", headers=_hdr(*VERIFIER))
+    assert r.status_code == 200
+    assert r.json()["stats"]["earningsMonth"] == "Apr 2026"

@@ -58,6 +58,9 @@ class CompanyCredits(ReadModel):
     earnedThisMonth: int
     spentThisMonth: int
     ledger: list[CreditTransaction] = Field(default_factory=list)
+    # Admin-set ₹ per credit, or None while no rate has been set. Lets the
+    # company pages convert credits without the admin-only rate endpoint.
+    rupeesPerCredit: Optional[float] = None
 
 
 class CreditMutation(AppModel):
@@ -178,6 +181,8 @@ class SearchResponse(ReadModel):
     query: str
     candidates: list[CandidateMatch] = Field(default_factory=list)
     facets: SearchFacets
+    # Credits one unlock costs — the UI shows this instead of a copy of it.
+    unlockCost: int = 0
 
 
 class PipelineCard(ReadModel):

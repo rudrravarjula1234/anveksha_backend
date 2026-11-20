@@ -165,3 +165,20 @@ async def test_only_the_owner_can_share_a_dossier(client: AsyncClient):
     assert r.status_code == 404
     r = await client.get("/api/dossier/me", headers=_hdr(*AARAV))
     assert r.json()["isShared"] is False
+
+
+@pytest.mark.asyncio
+async def test_unknown_live_session_is_404_not_a_stand_in(client: AsyncClient):
+    r = await client.get("/api/interviews/session/NO-SUCH-SESSION", headers=_hdr(*AARAV))
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_dossier_lookup_never_substitutes_another_candidate(client: AsyncClient):
+    mine = (await client.get("/api/dossier/me", headers=_hdr(*AARAV))).json()
+    # By dossier id and by candidate id: the same, real dossier.
+    assert (await client.get(f"/api/dossier/{mine['id']}", headers=_hdr(*AARAV))).json()["id"] == mine["id"]
+    assert (await client.get(f"/api/dossier/{mine['candidateId']}", headers=_hdr(*AARAV))).json()["id"] == mine["id"]
+    # Unknown id: 404, not the demo candidate's dossier.
+    r = await client.get("/api/dossier/no-such-candidate", headers=_hdr(*AARAV))
+    assert r.status_code == 404

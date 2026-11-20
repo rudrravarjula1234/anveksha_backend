@@ -191,3 +191,20 @@ async def test_chat_streams_text(client: AsyncClient):
     )
     assert r.status_code == 200
     assert "System Design (82/100)" in r.text
+
+
+@pytest.mark.asyncio
+async def test_search_reports_the_unlock_cost(client: AsyncClient):
+    # The UI shows this figure instead of keeping its own copy of it.
+    r = await client.post("/api/ai-search", json={"query": "", "filters": {}}, headers=_hdr(*COMPANY))
+    assert r.status_code == 200
+    assert r.json()["unlockCost"] == 50
+
+
+@pytest.mark.asyncio
+async def test_company_credits_carry_the_admin_set_rate(client: AsyncClient):
+    # Companies read the rate here — the admin rate endpoint is admin-only.
+    r = await client.get("/api/companies/me/credits", headers=_hdr(*COMPANY))
+    assert r.status_code == 200
+    assert r.json()["rupeesPerCredit"] == 10
+    assert (await client.get("/api/admin/credit-rate", headers=_hdr(*COMPANY))).status_code == 403
