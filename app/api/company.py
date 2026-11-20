@@ -222,20 +222,28 @@ async def chat(
 
     locked = not (body.candidateId and await service.is_unlocked(body.candidateId))
 
+    # The only facts the answer may use: this candidate's verified evidence.
+    evidence = await service.chat_evidence(body.candidateId) if body.candidateId else None
+    if evidence is not None and locked:
+        # Locked candidates are never named — not even inside the evidence.
+        evidence["name"] = candidate_alias(body.candidateId)
+
     registry = AgentRegistryService(db)
     result = await registry.run_agent(
         "candidate_chat",
         {
-            "task": "Answer the company's question about this candidate from session evidence only.",
-            "candidateRef": candidate_alias(body.candidateId) if locked else body.candidateId,
+            "task": (
+                "Answer the company's question about this candidate using ONLY the evidence given. "
+                "Be brief and direct (1-2 sentences). If the skill asked about is not in the "
+                "evidence, say there is no session evidence on it."
+            ),
+            "candidateRef": evidence["name"] if evidence else candidate_alias(body.candidateId),
             "locked": locked,
             "question": body.prompt,
+            "evidence": evidence,
         },
     )
     answer = result.output
-    if locked:
-        # Belt-and-braces: scrub the seeded candidate's name from canned text.
-        answer = answer.replace("Aarav", candidate_alias(body.candidateId)).replace("’s’", "'s")
 
     # Perf (H4): the typing cadence used to sleep 40 ms per 24-char chunk
     # unconditionally — every answer paid ~40 ms × ceil(len/24) of pure

@@ -8,6 +8,7 @@ by loading and sorting the whole ledger on every read — see
 app/models/company.py's module docstring for why.
 """
 
+import re
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
@@ -57,6 +58,28 @@ from app.schemas.company import (
 )
 
 _COMPANY_ID = "co_northstack"
+
+# Words in a hiring query that say nothing about skills.
+_QUERY_STOPWORDS = {
+    "a", "an", "the", "and", "or", "with", "without", "in", "on", "of", "for", "to", "at", "as", "by", "is", "are",
+    "who", "someone", "somebody", "candidate", "candidates", "engineer", "engineers", "developer", "developers",
+    "need", "needs", "looking", "want", "strong", "good", "solid", "deep", "experience", "experienced", "years",
+    "year", "yrs", "skills", "skill", "knowledge", "ideally", "comfortable", "handled", "has", "have", "should",
+    "can", "able", "plus", "like", "etc", "using", "production", "real", "world", "wild",
+}
+
+
+def _terms(text: str) -> list[str]:
+    """Lower-cased skill-ish tokens: keeps '.net', 'c#', 'next.js', 'ci/cd'."""
+    tokens = re.findall(r"[a-z0-9][a-z0-9.+#/-]*|\.[a-z0-9]+", text.lower())
+    return [t.strip(".-/") or t for t in tokens if t not in _QUERY_STOPWORDS and len(t) >= 2]
+
+
+def _hits(terms: list[str], text: str) -> set[str]:
+    """Query terms found in `text` as a whole word or word prefix
+    ('postgres' finds 'PostgreSQL'; 'go' does not find 'algorithms')."""
+    words = set(_terms(text))
+    return {t for t in terms if any(w == t or (len(t) >= 3 and w.startswith(t)) for w in words)}
 
 
 def _interviewer_to_schema(row: InterviewerModel) -> AnonymousInterviewer:
@@ -398,10 +421,30 @@ class CompanyService:
         stmt = (
             select(SearchCandidateModel)
             .where(SearchCandidateModel.verification_score >= min_score)
-            .order_by(SearchCandidateModel.id)
+            .order_by(SearchCandidateModel.verification_score.desc(), SearchCandidateModel.id)
             .limit(self.SEARCH_CAP)
         )
-        rows = (await self.db.execute(stmt)).scalars().all()
+        rows = list((await self.db.execute(stmt)).scalars().all())
+
+        # Rank by the query. Verified skills are the evidence; the title counts
+        # for less; a term that only hits an untested (gray) skill earns
+        # nothing. Location is never matched — it would leak a locked
+        # candidate's hidden location. An empty query lists the whole pool.
+        terms = list(dict.fromkeys(_terms(body.query or "")))
+        match_pct: dict[str, int] = {}
+        if terms:
+            ranked: list[tuple[int, SearchCandidateModel]] = []
+            for row in rows:
+                verified = _hits(terms, " ".join(row.verified_skills or []))
+                titled = _hits(terms, row.title or "") - verified
+                if not verified and not titled:
+                    continue
+                pct = round(100 * (len(verified) + 0.5 * len(titled)) / len(terms))
+                ranked.append((pct, row))
+            ranked.sort(key=lambda pr: (-pr[0], -pr[1].verification_score))
+            rows = [row for _, row in ranked]
+            match_pct = {row.id: pct for pct, row in ranked}
+
         unlocked = await self._unlocked_ids([r.id for r in rows])
         matches: list[CandidateMatch] = []
         for row in rows:
@@ -415,7 +458,8 @@ class CompanyService:
                 CandidateMatch(
                     id=row.id, name=name, initials=initials, title=row.title, years=row.years,
                     location=location, verificationScore=row.verification_score,
-                    matchPercent=row.match_percent, verifiedSkills=list(row.verified_skills or []),
+                    matchPercent=match_pct.get(row.id, row.match_percent),
+                    verifiedSkills=list(row.verified_skills or []),
                     graySkills=list(row.gray_skills or []), lastActivity=row.last_activity,
                     locked=locked or None, alias=alias,
                 )
@@ -431,6 +475,33 @@ class CompanyService:
             facets=facets,
             unlockCost=self.UNLOCK_COST,
         )
+
+    async def chat_evidence(self, candidate_id: str) -> Optional[dict[str, Any]]:
+        """The verified evidence the candidate chat may answer from: the
+        skill ledger (state, score, depth, date) plus the tested-and-weak
+        areas from each skill's report. None when no ledger exists."""
+        from app.models.candidate import SkillReportDetail  # noqa: PLC0415
+        from app.models.skill import SkillLedger  # noqa: PLC0415
+
+        ledger = await self.db.get(SkillLedger, candidate_id)
+        if ledger is None:
+            return None
+        # All the ledger's report gaps in one query, not one per skill.
+        report_ids = [row.report_id for row in ledger.skills if row.report_id]
+        gaps_by_report: dict[str, list[str]] = {}
+        if report_ids:
+            stmt = select(SkillReportDetail.id, SkillReportDetail.gaps).where(SkillReportDetail.id.in_(report_ids))
+            for report_id, gaps in (await self.db.execute(stmt)).all():
+                gaps_by_report[report_id] = [g["area"] for g in (gaps or []) if g.get("area")]
+        skills = [
+            {
+                "name": row.name, "state": row.state, "depth": row.depth,
+                "score": round(row.score) if row.score is not None else None,
+                "lastVerified": row.last_verified, "gaps": gaps_by_report.get(row.report_id, []),
+            }
+            for row in ledger.skills
+        ]
+        return {"name": ledger.candidate_name, "skills": skills}
 
     async def pipeline(self) -> PipelineBoard:
         stmt = select(PipelineCardModel).order_by(PipelineCardModel.candidate_id)

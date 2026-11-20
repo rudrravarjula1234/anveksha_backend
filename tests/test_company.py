@@ -186,11 +186,12 @@ async def test_followup_request(client: AsyncClient):
 async def test_chat_streams_text(client: AsyncClient):
     r = await client.post(
         "/api/companies/chat",
-        json={"candidateId": "cand_001", "prompt": "Does Aarav know system design?"},
+        json={"candidateId": "usr_cand_001", "prompt": "Does Aarav know system design?"},
         headers=_hdr(*COMPANY),
     )
     assert r.status_code == 200
-    assert "System Design (82/100)" in r.text
+    # No model in tests → the evidence-only fallback, built from the ledger.
+    assert "System Design (82)" in r.text
 
 
 @pytest.mark.asyncio

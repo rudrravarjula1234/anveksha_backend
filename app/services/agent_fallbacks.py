@@ -97,25 +97,37 @@ async def _search_fallback(context: dict[str, Any], db: AsyncSession) -> str:  #
     )
 
 
+# ─── Candidate chat (evidence-only) ─────────────────────────────────────
+#
+# Only used when no model answers. It doesn't try to interpret the question;
+# it states what is on file — the candidate's skill ledger and report gaps,
+# exactly as the chat endpoint passes them in.
+
+_STATE_LABELS = (
+    ("verified", "Verified"),
+    ("partial", "Partially verified"),
+    ("gray", "Untested"),
+    ("claimed", "Claimed but not verified"),
+)
+
+
 async def _chat_fallback(context: dict[str, Any], db: AsyncSession) -> str:  # noqa: ARG001
-    prompt = str(context.get("question", "")).lower()
-    ref = context.get("candidateRef", "the candidate")
-    if "payment" in prompt or "idempotenc" in prompt:
-        return (
-            f"I cannot answer this from existing evidence. {ref} has not been "
-            "verified on payment-domain specifics. You can trigger a targeted "
-            "30-minute follow-up session focused exactly on this."
+    name = str(context.get("candidateRef") or "This candidate")
+    skills: list[dict[str, Any]] = (context.get("evidence") or {}).get("skills") or []
+    if not skills:
+        return f"There is no verified session evidence for {name} yet."
+
+    def listing(state: str) -> str:
+        return ", ".join(
+            f"{s['name']} ({s['score']})" if s.get("score") is not None else s["name"]
+            for s in skills if s["state"] == state
         )
-    if "system design" in prompt or "staff" in prompt:
-        return (
-            f"{ref} was verified Advanced on System Design (82/100) in the Feb 02 "
-            "session. Strongest signals: tradeoff reasoning and operational realism."
-        )
+
+    facts = ". ".join(f"{label}: {v}" for state, label in _STATE_LABELS if (v := listing(state)))
+    gaps = " · ".join(f"{s['name']}: {'; '.join(s['gaps'][:2])}" for s in skills if s.get("gaps"))
     return (
-        f"Based on the evidence in {ref}'s dossier, they demonstrate solid "
-        "understanding with one notable gap. Verifier validated their explanation "
-        "of transactional producers and ordering guarantees; uncertain on "
-        "producer-epoch fencing."
+        f"The AI assistant is unavailable right now, so here is what's on file for {name}. {facts}."
+        + (f" Gaps found in sessions — {gaps}." if gaps else "")
     )
 
 
