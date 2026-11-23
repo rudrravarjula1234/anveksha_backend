@@ -9,6 +9,7 @@ facing report — syncs that report's score/verdict too, atomic for free
 under the app's one-transaction-per-request model.
 """
 
+import logging
 from typing import Any, Optional
 
 from sqlalchemy import select
@@ -301,6 +302,11 @@ class VerifierService:
         if row is None:
             return {"ok": True, "status": "published"}
 
+        # On submit, the report Agent (re)scores the transcript and the final
+        # report is reconciled with the SME's per-section overrides. Runs before
+        # variance so the signed-off scores are the authoritative ones.
+        await self._finalize_scoring(row)
+
         variance, flag = _section_variance(row.sections or [])
         gap_analysis: Optional[str] = None
         # Variance branch: the SME materially disagreed with the bot, so
@@ -336,6 +342,56 @@ class VerifierService:
             "varianceFlag": flag,
             "gapAnalysis": gap_analysis,
         }
+
+    async def _finalize_scoring(self, row: SessionReportModel) -> None:
+        """Submit-time: the report Agent re-scores the transcript, then the
+        result is reconciled with the SME's per-section overrides. Final
+        per-section value = SME `verifier_score` when set, else the Agent's
+        `ai_score`; `overall_score` + `verdict` are recomputed from those.
+        Best-effort — any failure leaves the SME-reviewed report untouched so
+        the publish still succeeds."""
+        try:
+            from app.services.report_builder import _verdict_for, generate_report_from_transcript
+
+            transcript_row = await self.db.get(AssessmentTranscriptModel, row.session_id)
+            if transcript_row is None:
+                return
+            gen = await generate_report_from_transcript(self.db, transcript_row)
+            if not gen:
+                return
+
+            agent_by_id = {s["section_id"]: s for s in gen["sections"]}
+            reconciled: list[dict[str, Any]] = []
+            finals: list[float] = []
+            for s in (row.sections or []):
+                agent = agent_by_id.get(s.get("section_id")) or {}
+                s2 = dict(s)
+                ai = agent.get("ai_score")
+                if isinstance(ai, (int, float)):
+                    s2["ai_score"] = int(ai)
+                if agent.get("notes") and not s2.get("notes"):
+                    s2["notes"] = agent["notes"]
+                if agent.get("evidence") and not s2.get("evidence"):
+                    s2["evidence"] = agent["evidence"]
+                vs = s2.get("verifier_score")
+                finals.append(vs if vs is not None else s2.get("ai_score", 0))
+                reconciled.append(s2)
+
+            if reconciled:
+                row.sections = reconciled
+            if finals:
+                row.overall_score = round(sum(finals) / len(finals))
+                row.verdict = _verdict_for(row.overall_score)
+            if gen.get("strengths") and not (row.strengths or []):
+                row.strengths = gen["strengths"]
+            if gen.get("gray_areas"):
+                existing = list(row.gray_areas or [])
+                for g in gen["gray_areas"]:
+                    if g and g not in existing:
+                        existing.append(g)
+                row.gray_areas = existing
+        except Exception:  # noqa: BLE001 — scoring is best-effort; publish must not fail
+            logging.getLogger(__name__).exception("finalize scoring failed for %s", row.id)
 
     async def _run_gap_analysis(self, report: SessionReportModel) -> Optional[str]:
         """Gap-analysis over the real transcript + the bot/SME score split.

@@ -18,12 +18,26 @@ _BRIEF_SM = (
 )
 
 _REPORT_SM = (
-    "You are Anveksha's report-generation agent. Given a completed session "
-    "transcript with timestamps, produce a structured skill report: per-dimension "
-    "rubric scores (0-100), a one-line verdict, a longer verdict paragraph, "
-    "summary items (demonstrated), gap items (tested and weak, each grounded in a "
-    "transcript timestamp), and evidence excerpts. Be evidence-bound: never infer "
-    "skills that weren't probed. Output JSON matching the SessionReport schema."
+    "You are Anveksha's report-generation agent. You receive an assessment "
+    "transcript (interviewer questions + candidate answers) plus the list of "
+    "sections to score (each with a section_id and its question). Judge the "
+    "candidate's demonstrated skill STRICTLY from what they actually said in the "
+    "transcript — never infer skills that were not probed.\n\n"
+    "Return ONLY valid JSON (no prose, no markdown fences) of exactly this shape:\n"
+    "{\n"
+    '  "sections": [{"section_id": "<id>", "ai_score": <int 0-100>, '
+    '"notes": "<one short sentence judging this answer>", '
+    '"evidence": "<short direct quote from the candidate\'s answer>"}],\n'
+    '  "strengths": ["<concrete demonstrated strength>"],\n'
+    '  "gaps": [{"text": "<tested-but-weak area>", "sub": "<why, grounded in the transcript>"}],\n'
+    '  "verdict": "verified" | "partial" | "gray",\n'
+    '  "summary": "<2-3 sentence overall verdict>"\n'
+    "}\n\n"
+    "Exactly one sections entry per provided section_id, in the same order. Score "
+    "by correctness, depth, and evidence: clearly correct and well-explained ~80-95, "
+    "partial or thin ~55-70, wrong, hand-wavy, or missing ~20-45. verdict: 'verified' "
+    "if the candidate clearly demonstrated the skill, 'partial' if mixed, 'gray' if "
+    "largely untested or weak."
 )
 
 _GAP_SM = (
